@@ -5,9 +5,12 @@ from ansys.dpf import core as dpf
 
 class ModeMapper:
     def __init__(self, rst_path, params_csv):
-        self.rst_path = rst_path
+        self.rst_path = os.path.abspath(rst_path) # 절대 경로 사용
+        if not os.path.exists(self.rst_path):
+            raise FileNotFoundError(f"RST file not found at: {self.rst_path}")
+        
         self.params_df = pd.read_csv(params_csv)
-        self.model = dpf.Model(rst_path)
+        self.model = dpf.Model(self.rst_path)
         self.mesh = self.model.metadata.meshed_region
         self.nodes = self.mesh.nodes
 

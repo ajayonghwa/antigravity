@@ -1,41 +1,64 @@
-# SpaceClaim IronPython Script for Geometry Extraction
-# This script is intended to be run INSIDE SpaceClaim (IronPython environment)
+# -*- coding: utf-8 -*-
+# Upgraded SpaceClaim IronPython Script for Geometry Extraction
+# Optimized for: Representative Beam/Shell Property Extraction (with Min/Max Ranges)
 
 import os
+import math
 
-# --- Helper Functions ---
+class SafeSCDM:
+    @staticmethod
+    def split_and_get_middle(body, z_pos, is_upper=True):
+        plane = Plane.Create(Frame.Create(Point.Create(0,0,z_pos), Vector.Create(0,0,1)))
+        res = SplitBody.ByCutter(Selection.Create(body), plane)
+        if not res or not res.Success or res.CreatedBodies.Count < 2:
+            return body
+            
+        all_pieces = [cb for cb in res.CreatedBodies]
+        sorted_pieces = sorted(all_pieces, key=lambda b: b.GetBoundingBox(Matrix.Identity).Center.Z)
+        return sorted_pieces[-1] if is_upper else sorted_pieces[0]
+
 def get_cylinder_properties(body):
-    """Calculate min/max/avg ID and OD for a cylindrical body."""
-    radii = []
+    """지배적인 내외경의 평균(Avg)과 변동 범위(Min, Max)를 모두 추출"""
+    ext_radii = []
+    int_radii = []
+    
     for face in body.Faces:
-        # Check if the face is cylindrical
         if str(face.Shape.Type) == 'Cylinder':
-            radii.append(face.Shape.Radius)
-    
-    if not radii:
-        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-    
-    radii.sort()
-    # Assuming the larger radii are OD and smaller are ID
-    # In a simple tube, we'd have two unique radii. 
-    # For PoC, we take the max as OD and min as ID.
-    od_list = [r for r in radii if r > sum(radii)/len(radii)]
-    id_list = [r for r in radii if r <= sum(radii)/len(radii)]
-    
-    od_avg = sum(od_list)/len(od_list) if od_list else max(radii)
-    id_avg = sum(id_list)/len(id_list) if id_list else 0.0
-    
-    return od_avg, min(od_list) if od_list else od_avg, max(od_list) if od_list else od_avg, \
-           id_avg, min(id_list) if id_list else id_avg, max(id_list) if id_list else id_avg
+            r = face.Shape.Radius
+            normal = face.NormalAt(Parameter.Create(0.5, 0.5))
+            center = face.Box.Center
+            radial = Vector.Create(center.X, center.Y, 0).Direction
+            is_internal = Vector.Dot(radial, normal) < -0.1
+            
+            if is_internal:
+                int_radii.append(r)
+            else:
+                ext_radii.append(r)
+                
+    def get_stats(radii):
+        if not radii: return 0, 0, 0
+        avg = sum(radii) / len(radii)
+        return avg, min(radii), max(radii)
+
+    od_avg, od_min, od_max = get_stats(ext_radii)
+    id_avg, id_min, id_max = get_stats(int_radii)
+    return od_avg, od_min, od_max, id_avg, id_min, id_max
 
 def get_plate_properties(body):
-    """Calculate OD and Thickness for a plate."""
-    # Thickness can be estimated from the Bounding Box Z-extent
-    bbox = body.GetBoundingBox(Matrix.Identity)
-    thickness = bbox.High.Z - bbox.Low.Z
+    z_faces = []
+    for face in body.Faces:
+        if str(face.Shape.Type) == 'Plane':
+            norm = face.NormalAt(Parameter.Create(0.5, 0.5))
+            if abs(norm.Z) > 0.9:
+                z_faces.append(face)
     
-    # OD can be estimated from X or Y extent
-    od = max(bbox.High.X - bbox.Low.X, bbox.High.Y - bbox.Low.Y)
+    if len(z_faces) < 2: return 0, 0
+    z_faces.sort(key=lambda f: f.Area, reverse=True)
+    f1 = z_faces[0]
+    f2 = z_faces[1]
+    
+    thickness = abs(f1.Box.Center.Z - f2.Box.Center.Z)
+    od = max(body.Box.Size.X, body.Box.Size.Y)
     return od, thickness
 
 # --- Main Script Execution ---
@@ -43,77 +66,42 @@ geometry_path = r"{GEOMETRY_PATH}"
 output_path = r"{OUTPUT_PATH}"
 sections = {SECTIONS}
 
-# 0. Set Units to mm (Force: N, Length: mm)
-# 이 코드는 SCDM의 세션 단위를 mm로 강제 고정합니다.
-options = LoadFileOptions.Create()
-DocumentHelper.Open(geometry_path, options)
-
-# SCDM API를 이용한 단위계 설정
-# 버전/환경에 따라 아래 방식 중 하나가 작동합니다.
-try:
-    # 2024 R1 방식
-    Session.Units.Length.SetUnits(UnitType.Millimeters)
-except:
-    # 구형 방식 대응 (주석 처리로 남겨둠)
-    # MM = UnitType.Millimeters
-    pass
+DocumentHelper.Open(geometry_path)
+try: Session.Units.Length.SetUnits(UnitType.Millimeters)
+except: pass
 
 results = []
-results.append("Name,Type,Z_Center,Volume,MassCenter_Z,Ixx,Iyy,Izz,OD_Avg,OD_Min,OD_Max,ID_Avg,ID_Min,ID_Max,Thickness")
+# 헤더에 Min, Max 추가
+header = "Name,Type,Z_Center,Volume,Ixx,Iyy,Izz,OD_Avg,OD_Min,OD_Max,ID_Avg,ID_Min,ID_Max,Thickness"
+results.append(header)
+
+root = GetRootPart()
+main_body = root.AllBodies[0]
 
 for sec in sections:
-    name = sec['name']
-    z_start = sec['z_start']
-    z_end = sec['z_end']
-    s_type = sec['type']
+    temp_body = main_body.Copy().CreatedBodies[0]
+    slice_top = SafeSCDM.split_and_get_middle(temp_body, sec['z_start'], is_upper=True)
+    final_slice = SafeSCDM.split_and_get_middle(slice_top, sec['z_end'], is_upper=False)
     
-    # 1. Create Planes and Split
-    # (Simplified for PoC: This assumes a single main body exists)
-    # In real usage, we iterate over all bodies in the Part
-    target_bodies = list(Window.ActiveWindow.Scene.GetRootPart().AllBodies)
+    props = final_slice.GetMassProperties()
+    od_avg, od_min, od_max, id_avg, id_min, id_max = 0, 0, 0, 0, 0, 0
+    thick = 0
     
-    # Create splitting planes at Z positions
-    plane_start = DatumPlaneCreator.Create(Point.Create(0, 0, z_start), Direction.DirZ)
-    plane_end = DatumPlaneCreator.Create(Point.Create(0, 0, z_end), Direction.DirZ)
-    
-    # This is a simplified split logic. In SCDM API, Combine.SplitBody is used.
-    # Note: For the actual implementation, we might need to handle body selection carefully.
-    
-    # 2. Extract Data from the body between Z_start and Z_end
-    # For PoC, let's assume we can identify the resulting body by its center
-    extracted_body = None
-    for body in Window.ActiveWindow.Scene.GetRootPart().AllBodies:
-        bbox = body.GetBoundingBox(Matrix.Identity)
-        z_center = (bbox.High.Z + bbox.Low.Z) / 2.0
-        if z_start < z_center < z_end:
-            extracted_body = body
-            break
-            
-    if extracted_body:
-        props = extracted_body.GetMassProperties()
-        vol = props.Volume
-        cg_z = props.MassCenter.Z
-        # Moments are relative to CG
-        ixx = props.PrincipalMoments.X
-        iyy = props.PrincipalMoments.Y
-        izz = props.PrincipalMoments.Z
+    if sec['type'] == "Cylinder":
+        od_avg, od_min, od_max, id_avg, id_min, id_max = get_cylinder_properties(final_slice)
+    elif sec['type'] == "Plate":
+        od_avg, thick = get_plate_properties(final_slice)
+        od_min, od_max = od_avg, od_avg
         
-        od_avg, od_min, od_max, id_avg, id_min, id_max = (0,0,0,0,0,0)
-        thickness = 0
-        
-        if s_type == "Cylinder":
-            od_avg, od_min, od_max, id_avg, id_min, id_max = get_cylinder_properties(extracted_body)
-        elif s_type == "Plate":
-            od_avg, thickness = get_plate_properties(extracted_body)
-            
-        line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14}".format(
-            name, s_type, cg_z, vol, cg_z, ixx, iyy, izz, od_avg, od_min, od_max, id_avg, id_min, id_max, thickness
-        )
-        results.append(line)
+    line = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13}".format(
+        sec['name'], sec['type'], props.MassCenter.Z, props.Volume,
+        props.PrincipalMoments.X, props.PrincipalMoments.Y, props.PrincipalMoments.Z,
+        od_avg, od_min, od_max, id_avg, id_min, id_max, thick
+    )
+    results.append(line)
+    final_slice.Delete()
 
-# Write to CSV
 with open(output_path, "w") as f:
     f.write("\n".join(results))
 
-# Close without saving
 DocumentHelper.Close()

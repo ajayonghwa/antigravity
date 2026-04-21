@@ -40,5 +40,10 @@
 
 1. **Step 1:** `02_geometry_extractor`를 통해 3D 모델 정보를 `final_parameters.csv`로 추출합니다.
 2. **Step 2:** `03_model_generator`를 실행하여 `base_model.dat`을 생성합니다.
-3. **Step 3:** 3D 해석 결과(`.rst`)를 `04_optimization_tuning` 폴더에 넣고 매퍼를 통해 정답 데이터를 생성합니다.
-4. **Step 4:** `tuning_engine.py`를 실행하여 최적의 파라미터를 찾습니다.
+3. **Step 3:** `04_optimization_tuning`에서 3D 해석 결과(`.rst`)의 **절대 경로**를 지정하여 매퍼를 실행하고 정답 데이터를 생성합니다.
+4. **Step 4:** `opt_config.json`에서 가중치, RST 경로, 그리고 **튜닝 모드**를 설정한 후 `tuning_engine.py`를 실행합니다.
+
+### ⚙️ 튜닝 모드 설정 (`opt_config.json`)
+
+- **`"tuning_mode": "light"`**: 주파수와 유효질량 위주로 빠르게 튜닝합니다. (초기 모델 정합성 확인용)
+- **`"tuning_mode": "full"`**: 주파수, 유효질량에 더해 **MAC(모드 형상)**까지 정밀하게 맞춥니다. (최종 검증용)
