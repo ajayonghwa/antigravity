@@ -3,11 +3,22 @@ __pycache__/
 validator/data/
 data/
 04_scripts/
+
+# Virtual Environments
 .unified_venv/
 .venv/
-**/.venv/
+venv/
+env/
+ENV/
+.env/
+
+# Python environment files
 bin/
 include/
 lib/
 lib64/
 pyvenv.cfg
+pip-selfcheck.json
+
+# OS files
+.DS_Store
