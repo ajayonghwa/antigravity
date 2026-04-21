@@ -1,0 +1,1 @@
+{"scdm_path": "dummy", "geometry_file": "dummy.scdoc", "output_dir": "./test_output", "sections": [{"name": "Shaft_A", "type": "Cylinder", "z_start": 0, "z_end": 150, "density": 7850, "tuning_margin": 0.2}, {"name": "Disk_B", "type": "Plate", "z_start": 150, "z_end": 170, "density": 7850, "tuning_margin": 0.1}]}

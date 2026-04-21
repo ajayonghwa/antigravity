@@ -1,0 +1,76 @@
+! Generated APDL Model for Reduced Order Analysis
+/PREP7
+FINISH
+/CLEAR
+/PREP7
+
+! --- Design Parameters (for Tuning) ---
+VAR_Shaft_A_OD = 100.0
+VAR_Shaft_A_ID = 80.0
+VAR_Disk_B_TK = 20.0
+VAR_Disk_B_OD = 300.0
+
+! --- Element Types and Materials ---
+MP,EX,1,210000.0
+MP,PRXY,1,0.3
+MP,DENS,1,7.85e-09
+ET,1,188
+ET,2,181
+ET,3,21
+KEYOPT,3,3,0
+
+! --- Section Definitions ---
+SECTYPE,1,PIPE,,Shaft_A
+SECDATA,VAR_Shaft_A_OD/2,VAR_Shaft_A_ID/2
+SECTYPE,2,SHELL,,Disk_B
+SECDATA,VAR_Disk_B_TK,1
+
+! --- Nodes and Structural Elements ---
+N,1,0,0,0.0
+N,2,0,0,75.0
+N,3,0,0,150.0
+TYPE,1
+MAT,1
+SECNUM,1
+E,1,2
+E,2,3
+TYPE,3
+MAT,1
+R,1,0.011775, 0.011775, 0.011775, 1000, 1000, 500
+REAL,1
+E,2
+N,4,0,0,160.0
+N,5,0,0,170.0
+! --- Precision Shell Plate: Disk_B ---
+N,6,0,0,160.0 ! Disk_B_Plate_Center
+N,7,VAR_Disk_B_OD/2*cos(0.0),VAR_Disk_B_OD/2*sin(0.0),160.0
+CERIG,4,7,ALL
+N,8,VAR_Disk_B_OD/2*cos(45.0),VAR_Disk_B_OD/2*sin(45.0),160.0
+CERIG,4,8,ALL
+N,9,VAR_Disk_B_OD/2*cos(90.0),VAR_Disk_B_OD/2*sin(90.0),160.0
+CERIG,4,9,ALL
+N,10,VAR_Disk_B_OD/2*cos(135.0),VAR_Disk_B_OD/2*sin(135.0),160.0
+CERIG,4,10,ALL
+N,11,VAR_Disk_B_OD/2*cos(180.0),VAR_Disk_B_OD/2*sin(180.0),160.0
+CERIG,4,11,ALL
+N,12,VAR_Disk_B_OD/2*cos(225.0),VAR_Disk_B_OD/2*sin(225.0),160.0
+CERIG,4,12,ALL
+N,13,VAR_Disk_B_OD/2*cos(270.0),VAR_Disk_B_OD/2*sin(270.0),160.0
+CERIG,4,13,ALL
+N,14,VAR_Disk_B_OD/2*cos(315.0),VAR_Disk_B_OD/2*sin(315.0),160.0
+CERIG,4,14,ALL
+TYPE,2
+MAT,1
+SECNUM,2
+E,6,7,8
+E,6,8,9
+E,6,9,10
+E,6,10,11
+E,6,11,12
+E,6,12,13
+E,6,13,14
+E,6,14,7
+TYPE,3
+R,2,0.003925, 0.003925, 0.003925, 2000, 2000, 4000
+REAL,2
+E,6

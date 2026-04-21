@@ -1,0 +1,49 @@
+! Generated APDL Model for Reduced Order Analysis
+/PREP7
+FINISH
+/CLEAR
+/PREP7
+
+! --- Design Parameters (for Tuning) ---
+VAR_Shaft_A_OD = 100.0
+VAR_Shaft_A_ID = 80.0
+VAR_Disk_B_TK = 20.0
+
+! --- Element Types and Materials ---
+MP,EX,1,2.1E5
+MP,PRXY,1,0.3
+MP,DENS,1,7850
+ET,1,188
+ET,2,181
+ET,3,21
+KEYOPT,3,3,0
+
+! --- Section Definitions ---
+SECTYPE,1,PIPE,,Shaft_A
+SECDATA,VAR_Shaft_A_OD/2,VAR_Shaft_A_ID/2
+SECTYPE,2,SHELL,,Disk_B
+SECDATA,VAR_Disk_B_TK,1
+
+! --- Base Mesh (3-nodes per section) ---
+N,1,0,0,0.0 ! Shaft_A_Start
+N,2,0,0,150.0 ! Shaft_A_End
+N,3,0,0,75.0 ! Shaft_A_CG
+TYPE,1
+MAT,1
+SECNUM,1
+E,1,3
+E,3,2
+N,4,0,0,150.0 ! Disk_B_Start
+N,5,0,0,170.0 ! Disk_B_End
+N,6,0,0,160.0 ! Disk_B_CG
+TYPE,3
+MAT,1
+R,2,0.003925, 0.003925, 0.003925, 2000, 2000, 4000
+REAL,2
+E,6
+
+! --- Extra Nodes and Connections ---
+N,7,0,0,125.0 ! Sensor_1
+CERIG,2,7,ALL
+N,8,50,0,0.0 ! Support_A
+CERIG,1,8,ALL

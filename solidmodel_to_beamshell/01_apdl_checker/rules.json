@@ -1,0 +1,34 @@
+{
+  "commands": {
+    "MP": {
+      "min_args": 3,
+      "labels": {
+        "index": 1,
+        "valid_values": ["EX", "EY", "EZ", "NUXY", "NUYZ", "NUXZ", "PRXY", "PRYZ", "PRXZ", "GXY", "GYZ", "GXZ", "DENS", "ALPX", "ALPY", "ALPZ", "KXX", "KYY", "KZZ", "C"]
+      },
+      "numeric_indices": [2]
+    },
+    "CP": {
+      "min_args": 4,
+      "labels": {
+        "index": 2,
+        "valid_values": ["UX", "UY", "UZ", "ROTX", "ROTY", "ROTZ", "ALL", "TEMP", "VOLT", "MAG", "ENKE"]
+      },
+      "numeric_indices": [1]
+    },
+    "ET": {
+      "min_args": 3,
+      "labels": null,
+      "numeric_indices": [1, 2],
+      "valid_elements": [181, 185, 188, 14, 39, 154, 170, 174, 175]
+    },
+    "D": {
+      "min_args": 4,
+      "labels": {
+        "index": 2,
+        "valid_values": ["UX", "UY", "UZ", "ROTX", "ROTY", "ROTZ", "ALL", "TEMP", "VOLT", "MAG"]
+      },
+      "numeric_indices": []
+    }
+  }
+}

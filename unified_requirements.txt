@@ -1,0 +1,22 @@
+# Unified Requirements for Antigravity Projects
+# Projects: doc_assistant, solid_decomposer, solidmodel_to_beamshell
+
+# Core Data & Science
+numpy
+scipy
+pandas
+
+# Documentation & PDF
+pymupdf
+python-docx
+lxml
+
+# Networking & API
+requests
+
+# Ansys Integration
+ansys-dpf-core
+
+# Utilities
+tqdm
+pathlib

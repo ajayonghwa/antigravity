@@ -1,0 +1,24 @@
+{
+  "ansys_version": "v241",
+  "scdm_path": "C:\\Program Files\\ANSYS Inc\\v241\\scdm\\SpaceClaim.exe",
+  "geometry_file": "C:\\Path\\To\\Your\\Model.scdoc",
+  "output_dir": "C:\\Path\\To\\Output",
+  "sections": [
+    {
+      "name": "Shaft_A",
+      "type": "Cylinder",
+      "z_start": 0.0,
+      "z_end": 150.0,
+      "density": 7850.0,
+      "tuning_margin": 0.2
+    },
+    {
+      "name": "Disk_B",
+      "type": "Plate",
+      "z_start": 150.0,
+      "z_end": 170.0,
+      "density": 7850.0,
+      "tuning_margin": 0.1
+    }
+  ]
+}

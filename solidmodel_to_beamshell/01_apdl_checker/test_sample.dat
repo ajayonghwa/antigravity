@@ -1,0 +1,31 @@
+! Sample APDL code for testing
+/PREP7
+
+! Correct ET
+ET, 1, 188
+! Incorrect ET (unknown element)
+ET, 2, 999
+! Incorrect ET (not enough args)
+ET, 3
+
+! Correct MP
+MP, EX, 1, 2E11
+MP, DENS, 1, 7850
+! Incorrect MP (invalid label)
+MP, WRONG_LABEL, 1, 100
+! Incorrect MP (not enough args)
+MP, EX, 2
+
+! Correct CP
+CP, 1, UX, 10, 20
+! Incorrect CP (invalid label)
+CP, 2, INVALID_DOF, 30, 40
+
+! Correct D
+D, ALL, ALL, 0
+! Incorrect D (invalid label)
+D, 100, STRESS, 0
+
+/SOLU
+SOLVE
+FINISH

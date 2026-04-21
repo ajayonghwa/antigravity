@@ -1,0 +1,3 @@
+Name,Type,Z_Center,Z_Start,Z_End,Mass,Density,EX,PRXY,Thickness,OD_Avg,ID_Avg,Ixx,Iyy,Izz
+Shaft_A,Cylinder,75.0,0.0,150.0,0.011775,7.85e-09,210000.0,0.3,0.0,100.0,80.0,1000,1000,500
+Disk_B,Plate,160.0,150.0,170.0,0.003925,7.85e-09,210000.0,0.3,20.0,300.0,0.0,2000,2000,4000
