@@ -200,18 +200,48 @@ class StrategyPlanner:
 
 
     def _generate_ogrid_plan(self, body_data, cylinder_face, hole_id="Core"):
-        origin = cylinder_face["origin"]
-        axis = cylinder_face["axis"]
+        origin = np.array(cylinder_face["origin"])
+        axis = np.array(cylinder_face["axis"])
         radius = cylinder_face.get("radius", 1.0)
+        
+        # 기본값: 반경의 60%
         core_offset = radius * 0.6
+        
+        # [지능형 회피] 주변의 모든 구멍(작은 것 포함) 조사
+        faces = body_data.get("faces", [])
+        all_holes = [f for f in faces if f["type"] in ["Cylinder", "Conical"] and f != cylinder_face]
+        
+        if all_holes:
+            danger_zones = []
+            for hole in all_holes:
+                h_orig = np.array(hole["origin"])
+                h_axis = np.array(hole["axis"])
+                h_rad = hole.get("radius", 0.0)
+                
+                # 메인 축과 평행한 구멍들만 우선 고려 (가장 흔한 케이스)
+                if np.isclose(np.abs(np.dot(axis, h_axis)), 1.0, atol=0.01):
+                    # 메인 축과 구멍 축 사이의 거리 계산
+                    dist = np.linalg.norm(np.cross(axis, h_orig - origin))
+                    # 간섭 구간: [거리 - 반경, 거리 + 반경]
+                    danger_zones.append((dist - h_rad, dist + h_rad))
+            
+            # 위험 구간 피하기 (간섭 시 0.05m = 50mm 정도 여유를 둠)
+            margin = 0.05 
+            for low, high in danger_zones:
+                if core_offset > low - margin and core_offset < high + margin:
+                    # 위험 구간에 걸리면 안쪽으로 살짝 밀어냄 (안쪽이 더 안정적)
+                    core_offset = low - margin
+                    if core_offset < radius * 0.3: # 너무 작아지면 바깥쪽으로
+                        core_offset = high + margin
+                    print(f" - O-Grid offset adjusted to {core_offset*1000:.1f}mm to avoid interference with nearby holes.")
         
         plan = {
             "strategy": "OGRID",
             "body_name": body_data["body_name"],
             "hole_id": hole_id,
-            "center": origin,
-            "axis": axis,
-            "core_offset": core_offset,
+            "center": [float(x) for x in origin],
+            "axis": [float(x) for x in axis],
+            "core_offset": float(core_offset),
             "named_selections": {
                 "core": f"{self.sub_device_name}_{hole_id}_OGRID_CORE",
                 "outer": f"{self.sub_device_name}_{hole_id}_OGRID_OUTER"

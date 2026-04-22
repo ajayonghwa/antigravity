@@ -135,4 +135,22 @@ finalize()
         output_path = os.path.join(self.output_dir, output_name)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(script_template)
+            
+        # 가이드 문서 자동 생성 로직 복구
+        try:
+            from scdm_bridge.guide_generator import GuideGenerator
+            guide_md = GuideGenerator.generate_markdown(
+                plan_list[0]['body_name'] if plan_list else "Unknown", 
+                "ADVANCED_PLAN", 
+                plan_list
+            )
+            guide_path = os.path.join(self.output_dir, "Decomposition_Guide.md")
+            with open(guide_path, "w", encoding="utf-8") as f:
+                f.write(guide_md)
+            print(f" - Markdown guide generated: {guide_path}")
+        except Exception as e:
+            print(f" [Error] Guide generation failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
         return output_path
