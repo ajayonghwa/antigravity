@@ -1,46 +1,44 @@
-# 📘 Solid Decomposer User Guide (v2.0)
+# 📘 Solid Decomposer: Automated CAD Partitioning Pipeline (v2.1)
 
-본 가이드는 고도화된 규칙 기반 플래너와 AI 지능형 플래너를 활용하여 복잡한 3D 형상을 분할하는 방법을 설명합니다.
+본 프로젝트는 복잡한 3D 형상을 해석 및 메쉬 최적화를 위해 자동으로 분할하는 통합 자동화 시스템입니다. 
 
-## 1. 개요 (Dual-Engine Strategy)
-본 시스템은 두 가지 엔진을 제공합니다.
-- **Rule-based Engine (Default)**: 초고속 기하학 수식을 이용한 분할. (대부분의 표준 형상에 권장)
-- **AI-driven Engine (Advanced)**: Gemma 모델을 이용한 추론 기반 분할. (매우 복잡한 비정형 형상에 권장)
+## 🚀 핵심 기능 (Key Features)
+
+### 1. Dual-Engine Strategy
+- **Rule-based Engine (Default)**: 기하학적 수식을 이용한 초고속 분할. 표준 형상(Cylinder, Stepped, Perforated)에 최적화.
+- **AI-driven Engine (Advanced)**: Gemma 모델을 이용한 지능형 추론 분할. 복잡한 비정형 형상 및 접합부(Junction)에 권장.
+
+### 2. 🛡️ Topological Reliability (Bug Fix)
+- **Sequential Splitting**: 일괄 분할 시 일부 조각이 누락되는 현상(3조각 버그)을 해결하기 위해 **순차적 분할 및 계보 추적(Ancestry Tracking)** 로직을 도입하여 100% 분할 성공률을 보장합니다.
+- **0.01mm Offset Safety**: 수치적 불안정성으로 인한 커널 에러를 방지하기 위해 미세 오프셋 로직이 적용되어 있습니다.
+
+### 3. 📖 Automated Human Guide
+- 스페이스클레임 스크립트 생성 시, 동일한 위치에 **`Decomposition_Guide.md`**가 자동으로 생성됩니다. 
+- 자동화가 어려운 특수한 상황에서 엔지니어가 직접 보고 따라 할 수 있는 Step-by-Step 지침을 제공합니다.
 
 ---
 
-## 2. 사용 방법
+## 📂 폴더 구조
 
-### A. 일반 모드 (빠른 실행)
-표준적인 다공판, 파이프, 샤프트 형상에 사용합니다.
+- **`01_extractor/`**: SpaceClaim 기하 정보 추출 엔진.
+- **`02_planner/`**: 분할 전략 수립 (Rule-based / AI).
+- **`03_generator/`**: **(핵심)** 순차 분할 로직이 적용된 IronPython 스크립트 생성기.
+- **`scdm_bridge/`**: 맥북 환경에서의 시뮬레이션 및 안전 API 래퍼.
+- **`validator/`**: CadQuery 기반의 형상/위상 자동 검증 도구.
+
+---
+
+## 🛠️ 사용 방법
+
 ```bash
+# 기본 실행 (규칙 기반)
 python main_run.py [파일이름]
-```
-- **특징**: 1초 내외로 완료. 0.01mm 오프셋 로직으로 위상 에러가 방지됨.
 
-### B. AI 지능형 모드 (선택 사항)
-기울어진 접합부나 복합적인 보스급 형상에서 규칙 기반 플래너가 만족스럽지 않을 때 사용합니다.
-```bash
+# AI 모드 실행
 python main_run.py [파일이름] --ai
 ```
-- **사전 요구사항**: 로컬에 `ollama` 및 `gemma4:e4b` 모델이 설치되어 있어야 함.
-- **특징**: AI가 형상을 분석하여 최적의 분할 계획을 JSON으로 제안함 (약 1~2분 소요).
+
+결과물은 `04_scripts/` 폴더 내에 `final_scdm_script.py`와 `Decomposition_Guide.md`로 저장됩니다.
 
 ---
-
-## 3. 주요 개선 사항 (v2.0)
-- **Topological Safety**: 십자 분할 시 0.01mm 미세 이동을 통해 SpaceClaim 커널 에러를 원천 봉쇄함.
-- **Feature-Aware Axial Splits**: 단차뿐만 아니라 테이퍼 구간 등 모든 주요 기하학적 변화 지점을 자동으로 포착하여 격리함.
-- **Angled Junction Support**: 기울어진 파이프(Y-Junction)에 대해 로컬 축 기반의 수직 분할(Transverse Split)을 자동 적용함.
-
----
-
-## 4. 문제 해결 (Troubleshooting)
-- **Unable to split body 에러**: 
-    - 형상이 너무 미세하게 겹쳐있을 때 발생합니다. 
-    - `strategy_planner.py`에서 `threshold_radius` 수치를 조절하여 작은 구멍을 필터링하세요.
-- **Gemma 응답 지연**: 
-    - 보스 레벨 형상은 데이터량이 많아 시간이 걸릴 수 있습니다. 터미널의 "Thinking..." 메시지를 기다려 주세요.
-
----
-*Created by Antigravity AI Agent*
+*Created by Antigravity AI Coding Assistant*

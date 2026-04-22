@@ -45,9 +45,29 @@ def get_face_data(face):
             # 실린더(Cylinder) 정보
             if "Cylinder" in shape_type:
                 data["radius"] = getattr(geometry, 'Radius', 0)
+                data["is_internal"] = False # 기본값: 외부 경계(Solid)
+                
                 if frame:
                     data["axis"] = [frame.DirZ.X, frame.DirZ.Y, frame.DirZ.Z]
                     data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
+                
+                # 내경(Hole) 판별 로직 (CadQuery 검증 로직 이식)
+                try:
+                    # 1순위: 면의 방향성(Orientation) 확인
+                    if hasattr(face, 'Orientation') and str(face.Orientation) == 'Reversed':
+                        data["is_internal"] = True
+                    else:
+                        # 2순위: 법선 벡터(Normal)와 방사 벡터(Radial)의 내적(Dot Product) 확인
+                        # SpaceClaim IronPython 내장 객체 활용
+                        try:
+                            param = Parameter.Create(0.5, 0.5)
+                            normal = face.NormalAt(param)
+                            center = face.Box.Center
+                            radial = Vector.Create(center.X, center.Y, 0).Direction
+                            if Vector.Dot(radial, normal) < -0.1:
+                                data["is_internal"] = True
+                        except: pass
+                except: pass
             
             # 평면(Plane) 정보
             elif "Plane" in shape_type:

@@ -38,12 +38,19 @@ class StrategyPlanner:
         threshold_radius = max_r * 0.15
         major_cyls = [c for c in cylinders if c.get("radius", 0) >= threshold_radius]
         
-        # 메인 축 결정 (가장 큰 원통 기준, 없으면 곡면 기준)
-        if cylinders:
+        # 외부 경계(Solid)와 내부 구멍(Hole) 명확히 분리
+        outer_cyls = [c for c in major_cyls if not c.get("is_internal", False)]
+        inner_cyls = [c for c in major_cyls if c.get("is_internal", False)]
+        
+        # 메인 축 결정 (가장 큰 '외부' 원통 기준, 없으면 전체 중 큰 것, 없으면 곡면 기준)
+        if outer_cyls:
+            largest_cyl = max(outer_cyls, key=lambda c: c.get("radius", 0))
+            main_axis = np.array(largest_cyl["axis"])
+        elif cylinders:
             largest_cyl = max(cylinders, key=lambda c: c.get("radius", 0))
             main_axis = np.array(largest_cyl["axis"])
         elif bends:
-            # 실린더가 없고 곡면만 있는 경우 첫 번째 곡면의 축을 기준으로 설정
+            # 실린더가 없고 곡면만 있는 경우
             main_axis = np.array([0, 0, 1]) # 기본값
             largest_cyl = None
         else:
@@ -83,12 +90,12 @@ class StrategyPlanner:
         # 3. 범용 축대칭 분할 (AXISYMMETRIC)
         # 어떤 형태의 원통형 부품(다공판, 파이프, 접합부, 사각블록의 메인홀 등)이든 이 하나의 지능적인 흐름으로 완벽히 분할합니다.
         
-        # 주축과 평행한 유효 원통들 (메인 몸통 + 메인 구멍)
+        # 주축과 평행한 유효 원통들 (메인 몸통 + 평행한 내부 구멍)
         parallel_major_cyls = [c for c in major_cyls if np.isclose(np.abs(np.dot(main_axis, np.array(c["axis"]))), 1.0, atol=0.01)]
         
         # 3-1. 교차하는 측면 구멍 (Side holes / Junction) 파악
-        # 기울어진 구멍(Y-Junction 등)은 O-grid보다 해당 구멍 축 기준의 Transverse 분할이 메쉬 품질에 유리합니다.
-        side_holes = [c for c in major_cyls if not np.isclose(np.abs(np.dot(main_axis, np.array(c["axis"]))), 1.0, atol=0.01)]
+        # 기울어진 구멍(Y-Junction 등)이나 O-grid는 오직 '내부 구멍(inner_cyls)'에 대해서만 수행해야 합니다.
+        side_holes = [c for c in inner_cyls if not np.isclose(np.abs(np.dot(main_axis, np.array(c["axis"]))), 1.0, atol=0.01)]
         for i, hole in enumerate(side_holes):
             dot_val = np.abs(np.dot(main_axis, np.array(hole["axis"])))
             if dot_val > 0.1 and dot_val < 0.9: # 기울어진 경우
