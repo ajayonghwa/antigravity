@@ -12,9 +12,8 @@ class SCDMGenerator:
     def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
         execution_calls = ""
         for i, plan in enumerate(plan_list):
-            # 플랜 타입별로 고유 인덱스 부여
             if plan["strategy"] == "OGRID":
-                call = f"apply_ogrid('{plan['body_name']}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('max_radius', 1.0)}, {i})\n"
+                call = f"apply_ogrid('{plan['body_name']}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
                 execution_calls += call
             elif plan["strategy"] in ["AXIAL", "SECTOR", "HGRID"]:
                 split = plan["split_plane"]
@@ -30,11 +29,9 @@ import math
 ALL_CUTTERS = []
 
 def get_matching_bodies(target_full_name):
-    # 타겟 경로 추출
     parts = target_full_name.split("/")
     target_base = parts[-1]
     target_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
-    
     bodies = GetRootPart().GetAllBodies()
     targets = []
     for b in bodies:
@@ -43,51 +40,52 @@ def get_matching_bodies(target_full_name):
             fn = getattr(b, 'GetFullName', None)
             if fn: b_full = fn()
         except: pass
-        
         b_parts = b_full.split("/")
-        b_base = b_parts[-1]
-        b_path = "/".join(b_parts[:-1]) if len(b_parts) > 1 else ""
-        
-        if b_path == target_path:
-            if b_base == target_base or b_base.startswith(target_base + "_"):
-                targets.append(b)
+        if b_parts[-1] == target_base or b_parts[-1].startswith(target_base + "_"):
+            targets.append(b)
     return targets
 
-def apply_ogrid(target_full_name, center_list, axis_list, core_offset, max_r, idx):
+def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
     origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
     direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
-    frame = Frame.Create(origin_pt, direction)
     
     targets = get_matching_bodies(target_full_name)
     for i, target_body in enumerate(targets):
         try:
-            # 1. 원형 커브 생성
-            circle = Circle.Create(frame, core_offset)
+            # 1. 원형 커브(Edge) 생성
+            circle = Circle.Create(Frame.Create(origin_pt, direction), core_offset)
             curve_seg = CurveSegment.Create(circle)
+            design_curve = DesignCurve.Create(GetRootPart(), curve_seg)
             
-            # 2. 원통형 서피스 생성을 위한 돌출(Extrude) 로직
-            # 타겟 바디를 충분히 관통할 수 있도록 길게 설정 (0.5m 정도)
+            # 2. ExtrudeEdges를 이용한 원통형 서피스 생성 (사용자 힌트 적용)
+            # 타겟 바디를 충분히 관통하도록 길게 돌출
             extrude_dist = 0.5 
-            # 시작점을 뒤로 밀어서 양방향 관통 효과
-            start_pt = Point.Create(origin_pt.X - direction.X*extrude_dist, 
-                                    origin_pt.Y - direction.Y*extrude_dist, 
-                                    origin_pt.Z - direction.Z*extrude_dist)
+            # 시작점을 뒤로 밀어서 양방향 관통 효과 유도
+            move_vec = Vector.Create(-direction.X * extrude_dist/2, -direction.Y * extrude_dist/2, -direction.Z * extrude_dist/2)
+            Move.Execute(Selection.Create(design_curve), move_vec)
             
-            # 원통형 면 생성 (Cylinder Surface)
-            cyl_geom = Cylinder.Create(Frame.Create(start_pt, direction), core_offset)
-            # 바디의 범위를 감안하여 충분히 긴 면을 가진 math_body 생성
-            # (단순화를 위해 Cylinder 기하 형상을 직접 사용하거나 서피스 바디 생성)
-            math_body = Body.CreateCylindricalBody(Frame.Create(start_pt, direction), core_offset, extrude_dist * 2)
+            options = ExtrudeEdgeOptions()
+            options.PullType = PullType.Add
+            # 엣지 선택 및 돌출 실행
+            sel = Selection.Create(design_curve.Edge)
+            result = ExtrudeEdges.Execute(sel, direction, extrude_dist, options)
             
-            # 완전 고유한 이름 부여
-            tool_name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
-            tool_body = DesignBody.Create(GetRootPart(), tool_name, math_body)
-            if tool_body: ALL_CUTTERS.append(tool_body)
+            # 생성된 서피스 바디 찾기
+            tool_body = None
+            if result.CreatedBodies.Count > 0:
+                tool_body = result.CreatedBodies[0]
+                tool_body.Name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
+                ALL_CUTTERS.append(tool_body)
+                
+                # 3. 분할 실행
+                try:
+                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
+                except: pass
             
-            # 원통형 면(Faces[0])으로 분할 실행
-            SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
+            # 임시 커브 삭제
+            design_curve.Delete()
         except Exception as e:
-            print("O-grid split skipped or failed on " + target_full_name + ": " + str(e))
+            print("O-grid error: " + str(e))
 
 def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
@@ -112,23 +110,17 @@ def finalize():
         try:
             valid_cutters = [c for c in ALL_CUTTERS if not getattr(c, 'IsDeleted', False)]
             if valid_cutters:
-                selection = Selection.Create(valid_cutters)
-                # 컴포넌트로 이동
-                new_occ = ComponentHelper.MoveBodiesToComponent(selection, None)
+                new_occ = ComponentHelper.MoveBodiesToComponent(Selection.Create(valid_cutters), None)
                 if new_occ:
-                    # Occurrence와 Template 모두 이름 변경 시도
                     try: 
                         new_occ.Name = "Decomposition_Tools"
                         new_occ.Template.Name = "Decomposition_Tools"
                     except: pass
-                    print("Successfully grouped cutters into 'Decomposition_Tools'.")
-        except Exception as e:
-            print("Finalize error: " + str(e))
-
+        except: pass
     try: GetRootPart().SharedTopology = PartSharedTopology.Share
     except: pass
 
-# --- Start Execution ---
+# --- Execution ---
 {execution_calls}
 finalize()
 """
@@ -136,7 +128,6 @@ finalize()
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(script_template)
             
-        # 가이드 문서 자동 생성 (생략 가능하면 패스)
         try:
             from scdm_bridge.guide_generator import GuideGenerator
             guide_md = GuideGenerator.generate_markdown(plan_list[0]['body_name'] if plan_list else "Body", "AXISYMMETRIC", plan_list)
