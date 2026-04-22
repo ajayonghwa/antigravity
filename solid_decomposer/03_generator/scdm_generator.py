@@ -11,14 +11,24 @@ class SCDMGenerator:
 
     def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
         execution_calls = ""
+        print(f"\n[Generating Script: {output_name}]")
+        print(f" - Total plans to process: {len(plan_list)}")
+        
         for i, plan in enumerate(plan_list):
-            if plan["strategy"] == "OGRID":
-                call = f"apply_ogrid('{plan['body_name']}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
+            strat = plan.get("strategy", "").upper()
+            body = plan.get("body_name", "Unknown")
+            
+            if strat == "OGRID":
+                call = f"apply_ogrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
                 execution_calls += call
-            elif plan["strategy"] in ["AXIAL", "SECTOR", "HGRID"]:
+                print(f"   -> Added O-GRID split for {body}")
+            elif strat in ["AXIAL", "SECTOR", "HGRID"]:
                 split = plan["split_plane"]
-                call = f"apply_split_plane('{plan['body_name']}', {split['origin']}, {split['normal']}, '{plan['strategy']}', {i})\n"
+                call = f"apply_split_plane('{body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
                 execution_calls += call
+                print(f"   -> Added {strat} split for {body}")
+            else:
+                print(f"   !! Warning: Unknown strategy '{strat}' skipped.")
 
         script_template = f"""
 # -*- coding: utf-8 -*-
