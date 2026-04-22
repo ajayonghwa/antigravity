@@ -9,64 +9,95 @@ class StrategyPlanner:
             "auto_merge_safety": True,
             "symmetry_check": True
         }
-        # [단위 변환] 스페이스클레임 미터(m) 수치를 사용자용 밀리미터(mm)로 변환하는 계수
         self.display_scale = 1000.0
 
     def analyze_body(self, body_data):
         faces = body_data.get("faces", [])
-        cylinders = [f for f in faces if f["type"] == "Cylinder"]
-        conicals = [f for f in faces if f["type"] == "Conical"]
-        planes = [f for f in faces if f["type"] == "Plane"]
-        bends = [f for f in faces if f["type"] == "Toroidal"]
+        cylinders = [f for f in faces if "Cylinder" in f["type"]]
+        conicals = [f for f in faces if "Conical" in f["type"]]
+        planes = [f for f in faces if "Plane" in f["type"]]
         plans = []
 
         if not cylinders and not conicals:
-            if planes and not bends:
+            if planes:
                 plans.extend(self._generate_hgrid_plan(body_data, planes))
                 return "HGRID", self._apply_beta_options(plans, body_data)
             return "COMPLEX", None
 
+        # 1. 메인 축 결정 (가장 큰 원통 기준)
         all_curved = cylinders + conicals
-        cyl_radii = [c.get("radius", 0) for c in all_curved]
-        max_r = max(cyl_radii) if cyl_radii else 1.0
-        threshold_radius = max_r * 0.15
-        major_cyls = [c for c in all_curved if c.get("radius", 0) >= threshold_radius]
-        inner_cyls = [c for c in major_cyls if c.get("is_internal", True)]
-        outer_cyls = [c for c in major_cyls if not c.get("is_internal", True)]
-        
-        largest_cyl = max(outer_cyls, key=lambda c: c.get("radius", 0)) if outer_cyls else (max(inner_cyls, key=lambda c: c.get("radius", 0)) if inner_cyls else None)
-        if not largest_cyl: return "COMPLEX", None
-
+        largest_cyl = max(all_curved, key=lambda c: c.get("radius", 0))
         main_axis = np.array(largest_cyl["axis"])
         axis_idx = np.argmax(np.abs(main_axis))
 
-        # 1. O-grid 처리 및 간섭 회피
-        parallel_major_cyls = [c for c in major_cyls if np.isclose(np.abs(np.dot(main_axis, np.array(c["axis"]))), 1.0, atol=0.01)]
-        for i, feat in enumerate(parallel_major_cyls):
-            plans.append(self._generate_ogrid_plan(body_data, feat, f"Core_{i}"))
-            print(f" - Core O-grid added: {feat['type']}_{i} (r={feat['radius']*self.display_scale:.1f}mm)")
+        # 2. 중복 제거된 O-grid 계획 수립 (축이 같으면 하나만)
+        # 축 방향이 같고 위치가 거의 같은 실린더들을 그룹화합니다.
+        unique_axes = []
+        for feat in all_curved:
+            feat_axis = np.array(feat["axis"])
+            feat_origin = np.array(feat["origin"])
+            
+            is_duplicate = False
+            for u_feat in unique_axes:
+                u_axis = np.array(u_feat["axis"])
+                u_origin = np.array(u_feat["origin"])
+                
+                # 축이 평행하고 중심선 거리가 매우 가까우면 동심원으로 판단
+                dist = np.linalg.norm(np.cross(u_axis, feat_origin - u_origin))
+                axis_dot = np.abs(np.dot(u_axis, feat_axis))
+                if axis_dot > 0.99 and dist < 0.001:
+                    is_duplicate = True
+                    # 더 큰 반경을 가진 것을 대표로 유지
+                    if feat["radius"] > u_feat["radius"]:
+                        u_feat["radius"] = feat["radius"]
+                    break
+            
+            if not is_duplicate:
+                unique_axes.append(feat)
 
-        # 2. 축 방향 분할 (Axial)
-        all_min = np.min([f["box"]["min"][axis_idx] for f in faces])
-        all_max = np.max([f["box"]["max"][axis_idx] for f in faces])
-        raw_z_splits = []
-        for feat in major_cyls:
-            z_min, z_max = feat["box"]["min"][axis_idx], feat["box"]["max"][axis_idx]
-            if not np.isclose(z_min, all_min, atol=0.001): raw_z_splits.append(z_min)
-            if not np.isclose(z_max, all_max, atol=0.001): raw_z_splits.append(z_max)
+        # O-grid 추가
+        for i, feat in enumerate(unique_axes):
+            plans.append(self._generate_ogrid_plan(body_data, feat, f"Core_{i}"))
+            print(f" - Core O-grid added: {feat['type']} (r={feat['radius']*self.display_scale:.1f}mm)")
+
+        # 3. 90도 섹터 분할 (Sector Split) 복구
+        # 메인 원통이 있고 충분히 크다면 십자 분할을 추가합니다.
+        if largest_cyl and largest_cyl["radius"] > 0.005: # 5mm 이상일 때만
+            origin = np.array(largest_cyl["origin"])
+            # 메인 축에 수직인 두 벡터 계산
+            v1 = np.array([0, 0, 0], dtype=float)
+            v1[(axis_idx + 1) % 3] = 1.0
+            v1 = v1 - np.dot(v1, main_axis) * main_axis
+            v1 /= np.linalg.norm(v1)
+            v2 = np.cross(main_axis, v1)
+            
+            plans.append(self._generate_axial_split_plan(body_data, origin, v1, "Sector_A"))
+            plans.append(self._generate_axial_split_plan(body_data, origin, v2, "Sector_B"))
+            print(" - 90-deg Sector splits added.")
+
+        # 4. 축 방향 단차 분할 (Axial)
+        all_z = []
+        for feat in all_curved:
+            all_z.append(feat["box"]["min"][axis_idx])
+            all_z.append(feat["box"]["max"][axis_idx])
         
-        raw_z_splits.sort()
+        all_z.sort()
         merged_z = []
-        if raw_z_splits:
-            merged_z.append(raw_z_splits[0])
-            for z in raw_z_splits[1:]:
-                if z - merged_z[-1] > 0.0005: merged_z.append(z) # 0.5mm 임계값
+        if all_z:
+            merged_z.append(all_z[0])
+            for z in all_z[1:]:
+                if z - merged_z[-1] > 0.001: merged_z.append(z)
+        
+        # 전체 범위 경계 제외
+        b_min = np.min([f["box"]["min"][axis_idx] for f in faces])
+        b_max = np.max([f["box"]["max"][axis_idx] for f in faces])
         
         for z in merged_z:
-            plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
-            print(f" - Axial Split at Z={z*self.display_scale:.1f}mm")
+            if not np.isclose(z, b_min, atol=0.001) and not np.isclose(z, b_max, atol=0.001):
+                plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
+                print(f" - Axial Split at Z={z*self.display_scale:.1f}mm")
 
-        # 3. 메타데이터에 표시용 단위 정보 주입 (Guide 전용)
+        # 메타데이터 주입
         for plan in plans:
             if "core_offset" in plan:
                 plan["display_offset"] = f"{plan['core_offset'] * self.display_scale:.1f}mm"
@@ -74,17 +105,15 @@ class StrategyPlanner:
                 orig = plan["split_plane"]["origin"]
                 plan["display_pos"] = f"{orig[axis_idx] * self.display_scale:.1f}mm"
 
-        strategy_name = "AXISYMMETRIC"
-        return strategy_name, self._apply_beta_options(plans, body_data)
+        return "AXISYMMETRIC", self._apply_beta_options(plans, body_data)
 
     def _apply_beta_options(self, plans, body_data):
         for plan in plans:
-            if self.options.get("mesh_recommendation"):
-                recommended_size = 2.0 
-                if "core_offset" in plan:
-                    recommended_size = round((plan["core_offset"] * self.display_scale) / 3.0, 1)
-                for key in plan["named_selections"]:
-                    plan["named_selections"][key] += f"_SIZE_{recommended_size}mm"
+            recommended_size = 2.0 
+            if "core_offset" in plan:
+                recommended_size = round((plan["core_offset"] * self.display_scale) / 3.0, 1)
+            for key in plan["named_selections"]:
+                plan["named_selections"][key] += f"_SIZE_{recommended_size}mm"
         return plans
 
     def _generate_ogrid_plan(self, body_data, cylinder_face, hole_id="Core"):
@@ -93,23 +122,15 @@ class StrategyPlanner:
         radius = cylinder_face.get("radius", 1.0)
         core_offset = radius * 0.6
         
-        # [지능형 회피]
+        # 간섭 회피
         faces = body_data.get("faces", [])
-        for hole in [f for f in faces if f["type"] in ["Cylinder", "Conical"] and f != cylinder_face]:
-            if np.isclose(np.abs(np.dot(axis, np.array(hole["axis"]))), 1.0, atol=0.01):
-                # 두 중심축 사이의 거리 계산
-                dist = np.linalg.norm(np.cross(axis, np.array(hole["origin"]) - origin))
-                
-                # [수정] 동심원(Concentric)인 경우 간섭 회피 대상에서 제외
-                if dist < 0.001: 
-                    continue
-                    
-                h_rad = hole.get("radius", 0.0)
-                # 실제로 옆에 있는 구멍과 겹칠 위험이 있을 때만 오프셋 조정
-                if core_offset > dist - h_rad - 0.01:
-                    new_offset = dist - h_rad - 0.01
-                    core_offset = max(new_offset, radius * 0.2)
-                    print(f" - Adjusted O-grid offset to {core_offset*self.display_scale:.1f}mm to avoid near hole (dist={dist*self.display_scale:.1f}mm)")
+        for hole in [f for f in faces if "Cylinder" in f["type"] and f != cylinder_face]:
+            dist = np.linalg.norm(np.cross(axis, np.array(hole["origin"]) - origin))
+            if dist < 0.001: continue # 동심원 제외
+            
+            h_rad = hole.get("radius", 0.0)
+            if core_offset > dist - h_rad - 0.01:
+                core_offset = max(dist - h_rad - 0.01, radius * 0.2)
 
         return {
             "strategy": "OGRID",
@@ -118,21 +139,26 @@ class StrategyPlanner:
             "center": [float(x) for x in origin],
             "axis": [float(x) for x in axis],
             "core_offset": float(core_offset),
+            "max_radius": float(radius), # 커터 크기 결정용
             "named_selections": {
                 "core": f"{self.sub_device_name}_{hole_id}_OGRID_CORE",
                 "outer": f"{self.sub_device_name}_{hole_id}_OGRID_OUTER"
             }
         }
 
-    def _generate_axial_split_plan(self, body_data, coord, main_axis=[0, 0, 1]):
-        origin = [0.0, 0.0, 0.0]
-        axis_idx = np.argmax(np.abs(np.array(main_axis)))
-        origin[axis_idx] = float(coord)
+    def _generate_axial_split_plan(self, body_data, z_or_origin, axis, suffix="AXIAL"):
+        if isinstance(z_or_origin, (float, int)):
+            origin = [0.0, 0.0, 0.0]
+            axis_idx = np.argmax(np.abs(np.array(axis)))
+            origin[axis_idx] = float(z_or_origin)
+        else:
+            origin = [float(x) for x in z_or_origin]
+            
         return {
             "strategy": "AXIAL",
             "body_name": body_data["body_name"],
-            "split_plane": {"origin": origin, "normal": [int(x) for x in main_axis]},
-            "named_selections": {"part_a": f"{self.sub_device_name}_AXIAL_A", "part_b": f"{self.sub_device_name}_AXIAL_B"}
+            "split_plane": {"origin": origin, "normal": [float(x) for x in axis]},
+            "named_selections": {"part_a": f"{self.sub_device_name}_{suffix}_A", "part_b": f"{self.sub_device_name}_{suffix}_B"}
         }
 
     def _generate_hgrid_plan(self, body_data, planes):

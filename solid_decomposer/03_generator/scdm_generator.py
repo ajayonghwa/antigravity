@@ -1,11 +1,9 @@
+# -*- coding: utf-8 -*-
 import os
-import clr
-import System
 
 class SCDMGenerator:
     def __init__(self, project_root):
         self.project_root = project_root
-        # 04_scripts 폴더 경로 수정 (복수형)
         self.output_dir = os.path.join(project_root, "04_scripts")
         if not os.path.exists(self.output_dir):
             try: os.makedirs(self.output_dir)
@@ -13,17 +11,14 @@ class SCDMGenerator:
 
     def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
         execution_calls = ""
-        for plan in plan_list:
+        for i, plan in enumerate(plan_list):
+            # 플랜 타입별로 고유 인덱스 부여
             if plan["strategy"] == "OGRID":
-                call = f"apply_ogrid('{plan['body_name']}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan['named_selections']})\n"
+                call = f"apply_ogrid('{plan['body_name']}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('max_radius', 1.0)}, {i})\n"
                 execution_calls += call
-            elif plan["strategy"] == "SECTOR":
+            elif plan["strategy"] in ["AXIAL", "SECTOR", "HGRID"]:
                 split = plan["split_plane"]
-                call = f"apply_sector('{plan['body_name']}', {split['origin']}, {split['normal']}, {plan['named_selections']})\n"
-                execution_calls += call
-            elif plan["strategy"] in ["HGRID", "AXIAL", "JUNCTION", "TRANSVERSE"]:
-                split = plan["split_plane"]
-                call = f"apply_hgrid('{plan['body_name']}', {split['origin']}, {split['normal']}, {plan['named_selections']})\n"
+                call = f"apply_split_plane('{plan['body_name']}', {split['origin']}, {split['normal']}, '{plan['strategy']}', {i})\n"
                 execution_calls += call
 
         script_template = f"""
@@ -35,8 +30,11 @@ import math
 ALL_CUTTERS = []
 
 def get_matching_bodies(target_full_name):
-    target_path = "/".join(target_full_name.split("/")[:-1])
-    target_base = target_full_name.split("/")[-1]
+    # 타겟 경로 추출
+    parts = target_full_name.split("/")
+    target_base = parts[-1]
+    target_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
+    
     bodies = GetRootPart().GetAllBodies()
     targets = []
     for b in bodies:
@@ -45,93 +43,77 @@ def get_matching_bodies(target_full_name):
             fn = getattr(b, 'GetFullName', None)
             if fn: b_full = fn()
         except: pass
-        if "/".join(b_full.split("/")[:-1]) == target_path:
-            b_name = b_full.split("/")[-1]
-            if b_name == target_base or b_name.startswith(target_base):
+        
+        b_parts = b_full.split("/")
+        b_base = b_parts[-1]
+        b_path = "/".join(b_parts[:-1]) if len(b_parts) > 1 else ""
+        
+        if b_path == target_path:
+            if b_base == target_base or b_base.startswith(target_base + "_"):
                 targets.append(b)
     return targets
 
-def apply_ogrid(target_full_name, center_list, axis_list, core_offset, ns_names):
+def apply_ogrid(target_full_name, center_list, axis_list, core_offset, max_r, idx):
     origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
     direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
     frame = Frame.Create(origin_pt, direction)
     
     targets = get_matching_bodies(target_full_name)
-    for target_body in targets:
+    for i, target_body in enumerate(targets):
         try:
-            circle = Circle.Create(frame, core_offset * 1.5)
+            # 커터 크기를 충분히 크게 (Unable to split 방지)
+            cutter_size = max(max_r * 2.5, 0.005) 
+            circle = Circle.Create(frame, cutter_size)
             curve_seg = CurveSegment.Create(circle)
             plane = Plane.Create(frame)
             curve_array = System.Array.CreateInstance(type(curve_seg), 1)
             curve_array[0] = curve_seg
             math_body = Body.CreatePlanarBody(plane, curve_array)
             
-            # 1. 루트 파트에 도구 생성
-            tool_body = DesignBody.Create(GetRootPart(), "Cutter_OGrid", math_body)
+            # 완전 고유한 이름 부여
+            tool_name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
+            tool_body = DesignBody.Create(GetRootPart(), tool_name, math_body)
             if tool_body: ALL_CUTTERS.append(tool_body)
             
             SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
-            
-            # 2. 네임드 셀렉션
-            if "core" in ns_names or "outer" in ns_names:
-                pass # (생략)
         except Exception as e:
-            print("O-grid error: " + str(e))
+            print("O-grid error on " + target_full_name + ": " + str(e))
 
-def apply_hgrid(target_full_name, origin_list, normal_list, ns_names):
+def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
     try:
-        tool_plane = DesignPlane.Create(GetRootPart(), "Cutter_HGrid", plane_geom)
-        if tool_plane: ALL_CUTTERS.append(tool_plane)
-    except: pass
-
-    targets = get_matching_bodies(target_full_name)
-    for target in targets:
-        try:
-            SplitBody.ByCutter(Selection.Create(target), plane_geom)
-        except: pass
-
-def apply_sector(target_full_name, origin_list, normal_list, ns_names):
-    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
-    normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
-    plane_geom = Plane.Create(Frame.Create(origin, normal))
-    
-    try:
-        # 섹터 분할 평면에도 고유 이름 부여
-        tool_name = "Cutter_Sector_Z" + str(round(origin.Z * 1000, 1))
+        tool_name = "Cutter_" + strategy + "_" + str(idx)
         tool_plane = DesignPlane.Create(GetRootPart(), tool_name, plane_geom)
         if tool_plane: ALL_CUTTERS.append(tool_plane)
     except: tool_plane = None
-    
+
     targets = get_matching_bodies(target_full_name)
     if targets:
         try:
-            # 커터 평면이 성공적으로 생성되었다면 그것을 사용, 아니면 기하 평면 사용
-            cutter_selection = Selection.Create(tool_plane) if tool_plane else plane_geom
-            SplitBody.ByCutter(Selection.Create(targets), cutter_selection, True)
+            cutter_sel = Selection.Create(tool_plane) if tool_plane else plane_geom
+            SplitBody.ByCutter(Selection.Create(targets), cutter_sel, True)
         except: pass
 
 def finalize():
-    # 사용자 힌트 적용: 모든 도구를 나중에 한꺼번에 컴포넌트로 이동
     if ALL_CUTTERS:
         try:
             valid_cutters = [c for c in ALL_CUTTERS if not getattr(c, 'IsDeleted', False)]
             if valid_cutters:
                 selection = Selection.Create(valid_cutters)
-                # None을 전달하여 새 컴포넌트를 만들고 그곳으로 이동시킵니다.
-                new_comp = ComponentHelper.MoveBodiesToComponent(selection, None)
-                if new_comp:
-                    try:
-                        # Template.Name과 Name 모두 시도
-                        if hasattr(new_comp, "Template"): new_comp.Template.Name = "Decomposition_Tools"
-                        else: new_comp.Name = "Decomposition_Tools"
+                # 컴포넌트로 이동
+                new_occ = ComponentHelper.MoveBodiesToComponent(selection, None)
+                if new_occ:
+                    # Occurrence와 Template 모두 이름 변경 시도
+                    try: 
+                        new_occ.Name = "Decomposition_Tools"
+                        new_occ.Template.Name = "Decomposition_Tools"
                     except: pass
                     print("Successfully grouped cutters into 'Decomposition_Tools'.")
         except Exception as e:
-            print("Failed to group cutters: " + str(e))
+            print("Finalize error: " + str(e))
 
     try: GetRootPart().SharedTopology = PartSharedTopology.Share
     except: pass
@@ -144,21 +126,12 @@ finalize()
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(script_template)
             
-        # 가이드 문서 자동 생성 로직 복구
+        # 가이드 문서 자동 생성 (생략 가능하면 패스)
         try:
             from scdm_bridge.guide_generator import GuideGenerator
-            guide_md = GuideGenerator.generate_markdown(
-                plan_list[0]['body_name'] if plan_list else "Unknown", 
-                "ADVANCED_PLAN", 
-                plan_list
-            )
-            guide_path = os.path.join(self.output_dir, "Decomposition_Guide.md")
-            with open(guide_path, "w", encoding="utf-8") as f:
+            guide_md = GuideGenerator.generate_markdown(plan_list[0]['body_name'] if plan_list else "Body", "AXISYMMETRIC", plan_list)
+            with open(os.path.join(self.output_dir, "Decomposition_Guide.md"), "w", encoding="utf-8") as f:
                 f.write(guide_md)
-            print(f" - Markdown guide generated: {guide_path}")
-        except Exception as e:
-            print(f" [Error] Guide generation failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
+        except: pass
 
         return output_path
