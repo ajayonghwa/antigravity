@@ -64,13 +64,7 @@ class StrategyPlanner:
                     break
             if not is_duplicate: unique_axes.append(feat)
 
-        for i, feat in enumerate(unique_axes):
-            plan = self._generate_ogrid_plan(body_data, feat, f"Core_{i}")
-            if plan:
-                plans.append(plan)
-                print(f" - Core O-grid: Offset={plan['core_offset']*self.display_scale:.1f}mm")
-
-        # 3. 90도 섹터 분할 (전용 계획 함수 사용)
+        # 1. 90도 섹터 분할 (최우선 수행)
         if largest_cyl and largest_cyl["radius"] > 0.005:
             origin = (np.array(largest_cyl["box"]["min"]) + np.array(largest_cyl["box"]["max"])) / 2.0
             v1 = np.array([0.0, 0.0, 0.0])
@@ -83,7 +77,7 @@ class StrategyPlanner:
             plans.append(self._generate_sector_split_plan(body_data, origin, v2, "Sector_B"))
             print(" - 90-deg Sector cross-splits planned.")
 
-        # 4. 축 방향 단차 분할
+        # 2. 축 방향 단차 분할
         all_z = []
         for feat in all_curved:
             all_z.append(feat["box"]["min"][axis_idx])
@@ -99,6 +93,13 @@ class StrategyPlanner:
             if z > b_min_all[axis_idx] + 0.001 and z < b_max_all[axis_idx] - 0.001:
                 plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
                 print(f" - Axial Split at Z={z*self.display_scale:.1f}mm")
+
+        # 3. O-GRID 분할 (나중에 수행)
+        for i, feat in enumerate(unique_axes):
+            plan = self._generate_ogrid_plan(body_data, feat, f"Core_{i}")
+            if plan:
+                plans.append(plan)
+                print(f" - Core O-grid: Offset={plan['core_offset']*self.display_scale:.1f}mm")
 
         return "AXISYMMETRIC", self._apply_beta_options(plans, body_data)
 
