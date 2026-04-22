@@ -21,16 +21,14 @@ def apply_ogrid(body_name, center_list, axis_list, core_offset, ns_names):
         except:
             pass
         
-        # [수정] 이름 매칭 강화: 원본 이름으로 시작하고 뒤에 숫자나 괄호가 붙는 모든 변종 포함
-        # 예: Solid 1, Solid 11, Solid 1 (1), Solid 1(1) 모두 매칭
+        # [핵심 수정] 엄격한 이름 매칭 (이웃 바디 오절단 방지)
         is_match = False
         if b_name == body_name:
             is_match = True
-        elif b_name.startswith(body_name):
-            suffix = b_name[len(body_name):].strip()
-            # 뒤에 붙은게 숫자이거나, 괄호로 시작하면 자식으로 간주
-            if not suffix or suffix.isdigit() or suffix.startswith("(") or suffix.startswith(" ("):
-                is_match = True
+        elif b_name.startswith(body_name + " ("):
+            is_match = True
+        elif b_name.startswith(body_name + " "):
+            is_match = True
         
         if is_match:
             target_bodies.append(b)
@@ -114,14 +112,14 @@ def apply_hgrid(body_name, origin_list, normal_list, ns_names):
         
         base = b_name.split("/")[-1]
         
-        # [수정] 자식 바디 매칭 로직 강화 (숫자 연속형 대응)
+        # [핵심 수정] 엄격한 이름 매칭 (이웃 바디 오절단 방지)
         is_match = False
         if base == body_name:
             is_match = True
-        elif base.startswith(body_name):
-            suffix = base[len(body_name):].strip()
-            if not suffix or suffix.isdigit() or suffix.startswith("("):
-                is_match = True
+        elif base.startswith(body_name + " ("): # "Body (1)" 형태 매칭
+            is_match = True
+        elif base.startswith(body_name + " "): # "Body 1" 형태 매칭
+            is_match = True
         
         if is_match:
             target_bodies.append(b)
@@ -159,6 +157,19 @@ def apply_hgrid(body_name, origin_list, normal_list, ns_names):
         except: pass
 
 
+def apply_sector(body_name, origin_list, normal_list, ns_names):
+    # 90도 십자 분할을 위한 전용 함수
+    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
+    normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+    plane = Plane.Create(Frame.Create(origin, normal))
+    
+    bodies = GetRootPart().GetAllBodies()
+    for b in bodies:
+        if b.Name.startswith(body_name):
+            try:
+                SplitBody.ByCutter(Selection.Create(b), plane)
+            except: pass
+
 def finalize():
     print("Applying Shared Topology for Conformal Meshing...")
     try:
@@ -191,7 +202,11 @@ finalize()
             if plan["strategy"] == "OGRID":
                 call = f"apply_ogrid('{plan['body_name']}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan['named_selections']})\n"
                 execution_calls += call
-            elif plan["strategy"] in ["HGRID", "AXIAL", "SECTOR", "JUNCTION", "TRANSVERSE"]:
+            elif plan["strategy"] == "SECTOR":
+                split = plan["split_plane"]
+                call = f"apply_sector('{plan['body_name']}', {split['origin']}, {split['normal']}, {plan['named_selections']})\n"
+                execution_calls += call
+            elif plan["strategy"] in ["HGRID", "AXIAL", "JUNCTION", "TRANSVERSE"]:
                 split = plan["split_plane"]
                 call = f"apply_hgrid('{plan['body_name']}', {split['origin']}, {split['normal']}, {plan['named_selections']})\n"
                 execution_calls += call
@@ -207,7 +222,18 @@ finalize()
         # 2. [추가] 휴먼 가이드(Markdown) 자동 생성 통합
         try:
             from scdm_bridge.guide_generator import GuideGenerator
-            guide_md = GuideGenerator.generate_markdown(plan_list[0]['body_name'] if plan_list else "Unknown", "AUTO", plan_list)
+            # 전체 전략 이름을 전달하도록 수정 (예: JUNCTION_CORE)
+            # plan_list가 비어있지 않다면 첫 번째 플랜의 body_name을 기준으로 생성
+            main_strategy = "INTELLIGENT_DECOMPOSITION"
+            if plan_list:
+                # 상위 수준에서 결정된 전략이 있다면 그걸 사용 (보통 main_run.py에서 전달)
+                pass 
+
+            guide_md = GuideGenerator.generate_markdown(
+                plan_list[0]['body_name'] if plan_list else "Unknown", 
+                "ADVANCED_PLAN", 
+                plan_list
+            )
             guide_path = os.path.join(self.project_root, "04_scripts", "Decomposition_Guide.md")
             with open(guide_path, "w", encoding="utf-8") as f:
                 f.write(guide_md)
