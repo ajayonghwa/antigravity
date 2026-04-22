@@ -18,7 +18,10 @@ include/
 lib/
 lib64/
 pyvenv.cfg
-pip-selfcheck.json
+
+# Ignore legacy folders
+legacy/
+**/legacy/pip-selfcheck.json
 
 # OS files
 .DS_Store
