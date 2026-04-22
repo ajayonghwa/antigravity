@@ -100,14 +100,18 @@ def apply_sector(target_full_name, origin_list, normal_list, ns_names):
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
     try:
-        tool_plane = DesignPlane.Create(GetRootPart(), "Cutter_Sector", plane_geom)
+        # 섹터 분할 평면에도 고유 이름 부여
+        tool_name = "Cutter_Sector_Z" + str(round(origin.Z * 1000, 1))
+        tool_plane = DesignPlane.Create(GetRootPart(), tool_name, plane_geom)
         if tool_plane: ALL_CUTTERS.append(tool_plane)
-    except: pass
+    except: tool_plane = None
     
     targets = get_matching_bodies(target_full_name)
     if targets:
         try:
-            SplitBody.ByCutter(Selection.Create(targets), plane_geom)
+            # 커터 평면이 성공적으로 생성되었다면 그것을 사용, 아니면 기하 평면 사용
+            cutter_selection = Selection.Create(tool_plane) if tool_plane else plane_geom
+            SplitBody.ByCutter(Selection.Create(targets), cutter_selection, True)
         except: pass
 
 def finalize():
