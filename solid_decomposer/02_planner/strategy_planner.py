@@ -183,7 +183,8 @@ class StrategyPlanner:
             if self.options.get("mesh_recommendation"):
                 recommended_size = 2.0 
                 if "core_offset" in plan:
-                    recommended_size = round(plan["core_offset"] / 3.0, 1)
+                    # [단위 수정] 내부 연산(Meters)을 화면 표시용(mm)으로 변환
+                    recommended_size = round((plan["core_offset"] * 1000) / 3.0, 1)
                 
                 # NS 이름에 추천 사이즈 추가
                 for key in plan["named_selections"]:
@@ -191,10 +192,12 @@ class StrategyPlanner:
 
             # 2. 자동 병합 안전성 (Beta)
             if self.options.get("auto_merge_safety"):
-                if plan.get("core_offset", 10) < 0.5:
+                # core_offset이 0.5mm(0.0005m) 이하인지 체크
+                if plan.get("core_offset", 10) * 1000 < 0.5:
                     plan["warning"] = "Too small split detected. Consider merging."
 
         return plans
+
 
     def _generate_ogrid_plan(self, body_data, cylinder_face, hole_id="Core"):
         origin = cylinder_face["origin"]
