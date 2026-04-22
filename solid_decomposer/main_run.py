@@ -32,16 +32,21 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
     planner = StrategyPlanner(sub_device_name=sub_device_name)
     all_plans = []
     
-    for body in data:
-        print(f"\n[Analyzing Body: {body['body_name']}]")
+    # [수정] 데이터 구조가 딕셔너리이므로 "bodies" 키로 접근합니다.
+    bodies_list = data.get("bodies", data) # 만약 예전 방식(리스트)이라면 그대로 사용
+    if isinstance(data, dict) and "bodies" in data:
+        bodies_list = data["bodies"]
+
+    for body in bodies_list:
+        print(f"\n[Analyzing Body: {body.get('body_name', 'Unknown')}]")
         strategy, plans = planner.analyze_body(body)
         
         if plans:
             print(f" - Strategy: {strategy} ({len(plans)} plans)")
             all_plans.extend(plans)
         else:
-            advice = planner.get_ai_advice(body)
-            print(f" - AI Advice: {advice}")
+            # advice = planner.get_ai_advice(body) # 이 함수가 없을 경우 대비
+            print(f" - No automatic plans generated for this body.")
 
     # 3. SCDM 실행 스크립트 생성 (03_generator)
     generator = SCDMGenerator(project_root)
