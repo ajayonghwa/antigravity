@@ -56,19 +56,15 @@ ALL_CUTTERS = []
 def get_matching_bodies(target_full_name):
     parts = target_full_name.split("/")
     target_base = parts[-1]
-    target_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
-    bodies = GetRootPart().GetAllBodies()
-    targets = []
-    for b in bodies:
-        b_full = b.Name
-        try:
-            fn = getattr(b, 'GetFullName', None)
-            if fn: b_full = fn()
-        except: pass
-        b_parts = b_full.split("/")
-        if b_parts[-1] == target_base or b_parts[-1].startswith(target_base + "_"):
-            targets.append(b)
-    return targets
+    
+    all_bodies = GetRootPart().GetAllBodies()
+    matched = []
+    for body in all_bodies:
+        b_name = body.Name
+        # 정확히 일치하거나, 분할되어 숫자가 붙은 경우(Body_1, Body_CORE 등) 모두 찾음
+        if b_name == target_base or b_name.startswith(target_base + "_") or b_name.startswith(target_base + " ("):
+            matched.append(body)
+    return matched
 
 def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
     origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
@@ -77,12 +73,7 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
     targets = get_matching_bodies(target_full_name)
     for i, target_body in enumerate(targets):
         try:
-            # 1. 원형 커브(Edge) 생성
-            circle = Circle.Create(Frame.Create(origin_pt, direction), core_offset)
-            curve_seg = CurveSegment.Create(circle)
-            design_curve = DesignCurve.Create(GetRootPart(), curve_seg)
-            
-            # 2. 원통형 커터 생성을 위한 돌출(Extrude) 로직
+            # 1. 원통형 커터 생성을 위한 돌출(Extrude) 로직
             extrude_dist = 0.5 
             shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
                                           origin_pt.Y - direction.Y * extrude_dist/2, 
@@ -125,7 +116,7 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
                 tool_body.Name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
                 ALL_CUTTERS.append(tool_body)
                 try:
-                    # [최종 확인된 형식] 4개 인자: Target, Cutter, Boolean, Info
+                    # [최종 확인된 형식] 4개 인자 호출
                     SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
                 except: pass
             
@@ -138,23 +129,19 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     frame = Frame.Create(origin, normal)
     
-    # [최종 전략] O-Grid와 동일하게 서피스 커터를 생성하여 분할
+    # [최종 전략] 원을 그린 뒤 내부를 채워(Fill) 평면 서피스 커터 생성
     try:
-        # 1. 충분히 큰 사각형 커브 생성 (바디를 다 덮을 정도)
-        size = 1.0 
-        rect = Rectangle.Create(frame, size, size)
-        design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(rect))
+        # 1. 적당히 큰 원(반지름 1m) 생성
+        huge_radius = 1.0 
+        circle_geom = Circle.Create(frame, huge_radius)
+        design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom))
         
-        # 2. 서피스로 돌출 (O-Grid 방식 재활용)
-        extrude_dist = 0.001 # 아주 얇게 돌출시켜 서피스 생성
+        # 2. Fill 명령어로 원 내부를 채워 서피스 바디 생성
         bodies_before = list(GetRootPart().GetAllBodies())
-        
         try:
-            # 4개 인자 방식으로 돌출 시도
-            ExtrudeEdges.Execute(Selection.Create(design_curve), extrude_dist, ExtrudeEdgeOptions(), None)
+            Fill.Execute(Selection.Create(design_curve), None)
         except:
-            # 5개 인자 방식으로 재시도
-            ExtrudeEdges.Execute(Selection.Create(design_curve), Selection.Create(normal), extrude_dist, ExtrudeEdgeOptions(), None)
+            Fill.Execute(Selection.Create(design_curve))
             
         bodies_after = list(GetRootPart().GetAllBodies())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
@@ -164,7 +151,7 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
             tool_body.Name = "Cutter_Surface_" + strategy + "_" + str(idx)
             ALL_CUTTERS.append(tool_body)
             
-            # 3. 분할 실행 (검증된 4인자 방식)
+            # 3. 분할 실행 (4인자 방식)
             targets = get_matching_bodies(target_full_name)
             for target in targets:
                 try:
@@ -178,17 +165,13 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
 def finalize():
     if ALL_CUTTERS:
         try:
-            valid_cutters = [c for c in ALL_CUTTERS if not getattr(c, 'IsDeleted', False)]
-            if valid_cutters:
-                new_occ = ComponentHelper.MoveBodiesToComponent(Selection.Create(valid_cutters), None)
-                if new_occ:
-                    try: 
-                        new_occ.Name = "Decomposition_Tools"
-                        new_occ.Template.Name = "Decomposition_Tools"
-                    except: pass
+            # 커터들 정리 및 공유 토폴로지 적용
+            for cutter in ALL_CUTTERS:
+                try: cutter.Delete()
+                except: pass
+            # 최종 바디들 간의 연결성 확보
+            PartSharedTopology.Share(GetRootPart(), None)
         except: pass
-    try: GetRootPart().SharedTopology = PartSharedTopology.Share
-    except: pass
 
 # --- Execution ---
 {execution_calls}
@@ -197,12 +180,5 @@ finalize()
         output_path = os.path.join(self.output_dir, output_name)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(script_template)
-            
-        try:
-            from scdm_bridge.guide_generator import GuideGenerator
-            guide_md = GuideGenerator.generate_markdown(plan_list[0]['body_name'] if plan_list else "Body", "AXISYMMETRIC", plan_list)
-            with open(os.path.join(self.output_dir, "Decomposition_Guide.md"), "w", encoding="utf-8") as f:
-                f.write(guide_md)
-        except: pass
-
+        
         return output_path
