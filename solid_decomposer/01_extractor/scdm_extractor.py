@@ -81,6 +81,16 @@ def get_face_data(face):
                 data["minor_radius"] = getattr(geometry, 'MinorRadius', 0)
                 if frame:
                     data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
+            
+            # 원뿔(Conical) 정보 (테이퍼 대응)
+            elif "Conical" in shape_type:
+                data["type"] = "Conical"
+                # 테이퍼 구간은 시작과 끝의 반지름이 다름
+                data["radius"] = getattr(geometry, 'Radius', 0)
+                data["half_angle"] = getattr(geometry, 'HalfAngle', 0)
+                if frame:
+                    data["axis"] = [frame.DirZ.X, frame.DirZ.Y, frame.DirZ.Z]
+                    data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
         except:
             pass
             

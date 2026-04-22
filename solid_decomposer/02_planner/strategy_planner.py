@@ -13,18 +13,12 @@ class StrategyPlanner:
     def analyze_body(self, body_data):
         faces = body_data.get("faces", [])
         cylinders = [f for f in faces if f["type"] == "Cylinder"]
+        conicals = [f for f in faces if f["type"] == "Conical"] # 테이퍼 추가
         planes = [f for f in faces if f["type"] == "Plane"]
         bends = [f for f in faces if f["type"] == "Toroidal"]
         plans = []
 
-    def analyze_body(self, body_data):
-        faces = body_data.get("faces", [])
-        cylinders = [f for f in faces if f["type"] == "Cylinder"]
-        planes = [f for f in faces if f["type"] == "Plane"]
-        bends = [f for f in faces if f["type"] == "Toroidal"]
-        plans = []
-
-        if not cylinders:
+        if not cylinders and not conicals:
             if planes and not bends:
                 plans.extend(self._generate_hgrid_plan(body_data, planes))
                 return "HGRID", self._apply_beta_options(plans, body_data)
@@ -33,10 +27,11 @@ class StrategyPlanner:
 
         # --- 유효 형상 필터링 (Major Feature Filtering) ---
         # 전체 부품 크기 대비 15% 미만의 자잘한 구멍(볼트 구멍 등)은 과감히 O-grid 대상에서 무시합니다.
-        cyl_radii = [c.get("radius", 0) for c in cylinders]
+        all_curved = cylinders + conicals
+        cyl_radii = [c.get("radius", 0) for c in all_curved]
         max_r = max(cyl_radii) if cyl_radii else 1.0
         threshold_radius = max_r * 0.15
-        major_cyls = [c for c in cylinders if c.get("radius", 0) >= threshold_radius]
+        major_cyls = [c for c in all_curved if c.get("radius", 0) >= threshold_radius]
         
         # 외부 경계(Solid)와 내부 구멍(Hole) 명확히 분리
         outer_cyls = [c for c in major_cyls if not c.get("is_internal", False)]
@@ -103,24 +98,41 @@ class StrategyPlanner:
             else:
                 plans.append(self._generate_ogrid_plan(body_data, hole, f"SideHole_{i}"))
 
-        # 3-2. 중심축 기준 십자 분할 (Sector Split)
+        # 3-2. 메인 축방향 구멍(Main Hole) 다중 O-grid 처리
+        # 모든 주요 평행 구멍들에 대해 겹겹이 코어 분할을 적용하여 격자 품질을 극대화합니다.
+        parallel_holes = [c for c in parallel_major_cyls if c.get("is_internal", False)]
+        parallel_holes.sort(key=lambda c: c.get("radius", 0), reverse=True) # 바깥쪽 구멍부터 순차적 계획
+        for i, hole in enumerate(parallel_holes):
+            plans.append(self._generate_ogrid_plan(body_data, hole, f"MainHole_{i}"))
+            print(f" - Multi-Hole O-grid added: Hole_{i} (r={hole['radius']:.2f})")
+
+        # 3-3. 중심축 기준 십자 분할 (Sector Split)
         if largest_cyl:
             origin = np.array(largest_cyl["origin"])
             plans.extend(self._generate_sector_split_plan(body_data, main_axis, origin))
         
-        # 3-3. 축 방향 단차 및 피쳐 격리 (Axial Split)
-        # 모든 주요 실린더의 시작/끝 지점을 추적하여 복합 단차 구역을 완벽히 격리합니다.
-        z_splits = []
+        # 3-4. 축 방향 단차 및 피쳐 격리 (Axial Split + Intelligent Merge)
+        # 모든 주요 실린더/콘의 시작/끝 지점을 추적합니다.
+        raw_z_splits = []
         axis_idx = np.argmax(np.abs(main_axis))
-        for cyl in parallel_major_cyls:
-            for val in [cyl["box"]["min"][axis_idx], cyl["box"]["max"][axis_idx]]:
-                if not any(np.isclose(val, existing, atol=0.01) for existing in z_splits):
-                    z_splits.append(val)
+        for feat in parallel_major_cyls:
+            for val in [feat["box"]["min"][axis_idx], feat["box"]["max"][axis_idx]]:
+                raw_z_splits.append(val)
         
-        z_splits.sort()
-        # 보스 레벨 대응: 너무 좁은 구간이 아니면 모든 주요 지점을 분할
-        for z in z_splits[1:-1]:
+        raw_z_splits.sort()
+        # [핵심] 지능형 단차 병합: 0.5mm 이하의 미세한 틈은 하나로 합쳐서 슬리버 바디 방지
+        merged_z = []
+        if raw_z_splits:
+            merged_z.append(raw_z_splits[0])
+            for z in raw_z_splits[1:]:
+                if z - merged_z[-1] > 0.5: # 0.5mm 병합 임계값
+                    merged_z.append(z)
+        
+        for z in merged_z[1:-1]:
             plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
+
+        # 3-5. 대칭성 체크 및 조언 추가
+        self._add_symmetry_advice(body_data, plans)
 
         return "AXISYMMETRIC", self._apply_beta_options(plans, body_data)
 
@@ -266,6 +278,21 @@ class StrategyPlanner:
             "named_selections": {"part_a": f"{self.sub_device_name}_SEC2_A", "part_b": f"{self.sub_device_name}_SEC2_B"}
         })
         return plans
+
+    def _add_symmetry_advice(self, body_data, plans):
+        """바운딩 박스 중심을 기반으로 대칭성 여부를 판단하여 조언을 추가합니다."""
+        faces = body_data.get("faces", [])
+        if not faces: return
+        
+        all_min = np.min([f["box"]["min"] for f in faces], axis=0)
+        all_max = np.max([f["box"]["max"] for f in faces], axis=0)
+        center = (all_min + all_max) / 2.0
+        
+        is_symmetric = np.all(np.isclose(center, 0, atol=0.1))
+        if is_symmetric:
+            advice = "[Symmetry Detected] 부품이 원점 기준 대칭입니다. 1/4 또는 1/8 모델만 사용하여 해석 시간을 단축하는 것을 권장합니다."
+            for plan in plans:
+                plan["symmetry_advice"] = advice
 
     def get_ai_advice(self, body_data):
         return "해당 형상은 분기점이 복잡합니다. 메인 바디와 연결된 파이프의 접합부를 기준으로 평면 분할을 먼저 시도하세요."
