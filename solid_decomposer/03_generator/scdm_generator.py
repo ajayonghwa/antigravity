@@ -57,7 +57,8 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, ns_names)
     frame = Frame.Create(origin_pt, direction)
     
     targets = get_matching_bodies(target_full_name)
-    for target_body in targets:
+    target_base = target_full_name.split("/")[-1]
+    for i, target_body in enumerate(targets):
         try:
             circle = Circle.Create(frame, core_offset * 1.5)
             curve_seg = CurveSegment.Create(circle)
@@ -66,8 +67,9 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, ns_names)
             curve_array[0] = curve_seg
             math_body = Body.CreatePlanarBody(plane, curve_array)
             
-            # 1. 루트 파트에 도구 생성
-            tool_body = DesignBody.Create(GetRootPart(), "Cutter_OGrid", math_body)
+            # 고유한 이름 부여
+            tool_name = "Cutter_OGrid_" + target_base + "_" + str(i)
+            tool_body = DesignBody.Create(GetRootPart(), tool_name, math_body)
             if tool_body: ALL_CUTTERS.append(tool_body)
             
             SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
@@ -84,9 +86,11 @@ def apply_hgrid(target_full_name, origin_list, normal_list, ns_names):
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
     try:
-        tool_plane = DesignPlane.Create(GetRootPart(), "Cutter_HGrid", plane_geom)
+        # 위치 정보를 포함한 고유 이름
+        tool_name = "Cutter_HGrid_Z" + str(round(origin.Z * 1000, 1))
+        tool_plane = DesignPlane.Create(GetRootPart(), tool_name, plane_geom)
         if tool_plane: ALL_CUTTERS.append(tool_plane)
-    except: pass
+    except: tool_plane = None
 
     targets = get_matching_bodies(target_full_name)
     for target in targets:
@@ -120,7 +124,8 @@ def finalize():
                 # None을 전달하여 새 컴포넌트를 만들고 그곳으로 이동시킵니다.
                 new_comp = ComponentHelper.MoveBodiesToComponent(selection, None)
                 if new_comp:
-                    new_comp.Name = "Decomposition_Tools"
+                    # Template.Name을 사용하여 확실하게 폴더명 지정
+                    new_comp.Template.Name = "Decomposition_Tools"
                     print("Successfully grouped cutters into 'Decomposition_Tools'.")
         except Exception as e:
             print("Failed to group cutters: " + str(e))
