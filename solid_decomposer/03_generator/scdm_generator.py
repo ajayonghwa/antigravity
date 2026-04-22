@@ -26,6 +26,19 @@ import clr
 import System
 import math
 
+# [강화] 스페이스클레임 API 네임스페이스 명시적 임포트
+try:
+    import SpaceClaim.Api.V19 as Api
+    from SpaceClaim.Api.V19 import *
+    from SpaceClaim.Api.V19.Modeler import *
+    from SpaceClaim.Api.V19.Commands import *
+except:
+    try:
+        import SpaceClaim.Api.V18 as Api
+        from SpaceClaim.Api.V18 import *
+        from SpaceClaim.Api.V18.Commands import *
+    except: pass
+
 ALL_CUTTERS = []
 
 def get_matching_bodies(target_full_name):
@@ -57,25 +70,45 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
             curve_seg = CurveSegment.Create(circle)
             design_curve = DesignCurve.Create(GetRootPart(), curve_seg)
             
-            # 2. ExtrudeEdges를 이용한 원통형 서피스 생성 (사용자 힌트 적용)
-            # 타겟 바디를 충분히 관통하도록 길게 돌출
+            # 2. 원통형 커터 생성을 위한 돌출(Extrude) 로직
             extrude_dist = 0.5 
-            # 시작점을 뒤로 밀어서 양방향 관통 효과 유도
-            move_vec = Vector.Create(-direction.X * extrude_dist/2, -direction.Y * extrude_dist/2, -direction.Z * extrude_dist/2)
-            Move.Execute(Selection.Create(design_curve), move_vec)
+            shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
+                                          origin_pt.Y - direction.Y * extrude_dist/2, 
+                                          origin_pt.Z - direction.Z * extrude_dist/2)
             
-            options = ExtrudeEdgeOptions()
-            options.PullType = PullType.Add
-            # 엣지 선택 및 돌출 실행
-            sel = Selection.Create(design_curve.Edge)
-            result = ExtrudeEdges.Execute(sel, direction, extrude_dist, options)
+            circle = Circle.Create(Frame.Create(shifted_origin, direction), core_offset)
+            design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle))
             
-            # 생성된 서피스 바디 찾기
             tool_body = None
-            if result.CreatedBodies.Count > 0:
-                tool_body = result.CreatedBodies[0]
-                tool_body.Name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
+            try:
+                sel = Selection.Create(design_curve.Edge)
+                # [강화] Commands 명시적 호출 및 인자 개수 대응
+                try:
+                    # 4개 인자 방식 시도
+                    result = Commands.ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+                except:
+                    # 5개 인자 방식(방향 포함) 시도
+                    result = Commands.ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+                
+                if result.CreatedBodies.Count > 0:
+                    tool_body = result.CreatedBodies[0]
+            except Exception as e:
+                print("Extrude error: " + str(e))
+                # [최종 보루] Pull 도구 시도
+                try:
+                    result = Commands.Pull.Execute(Selection.Create(design_curve.Edge), direction, extrude_dist, PullOptions(), None)
+                    if result.CreatedBodies.Count > 0: tool_body = result.CreatedBodies[0]
+                except: pass
+            
+            if tool_body:
+                tool_body.Name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
                 ALL_CUTTERS.append(tool_body)
+                try:
+                    # [강화] SplitBody도 Commands 명시 호출
+                    Commands.SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
+                except: pass
+            
+            design_curve.Delete()
                 
                 # 3. 분할 실행
                 try:

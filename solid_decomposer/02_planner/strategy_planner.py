@@ -50,7 +50,7 @@ class StrategyPlanner:
             
             # [강화된 외곽 필터링] 전체 바디 반경의 75% 이상이면 제외
             dist_from_main = np.linalg.norm(np.cross(main_axis, feat_origin - body_center))
-            if dist_from_center > body_radius * 0.75:
+            if dist_from_main > body_radius * 0.75:
                 continue
 
             is_duplicate = False
