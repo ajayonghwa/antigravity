@@ -20,9 +20,18 @@ class GuideGenerator:
                 lines.append(f"- **Angle:** 90-degree increments.")
                 lines.append(f"- **Purpose:** To create 4 manageable quadrants for high-quality mesh.")
                 
-            elif plan['strategy'] == "O-GRID":
-                lines.append(f"- **Action:** Extract/Offset a circular core with radius **{plan['radius']:.2f}mm**.")
+            elif plan['strategy'] == "OGRID":
+                lines.append(f"- **Action:** Extract/Offset a circular core with offset **{plan.get('core_offset', 2.0):.2f}mm**.")
                 lines.append(f"- **Location:** Center of the cylinder axis.")
+                lines.append(f"- **Named Selection:** {plan.get('named_selections', {}).get('core', 'CORE')}")
+
+            elif plan['strategy'] == "JUNCTION_CORE":
+                lines.append("- **Action:** Isolate the intersection core block.")
+                lines.append("- **Purpose:** To capture stress concentrations at the pipe junction using a hexa-core.")
+
+            elif plan['strategy'] == "HGRID":
+                lines.append("- **Action:** Perform planar grid splitting for the block body.")
+                lines.append("- **Purpose:** To maintain orthogonal mesh quality for non-cylindrical regions.")
             
             lines.append("")
             

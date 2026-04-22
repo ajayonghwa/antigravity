@@ -26,31 +26,27 @@ class StrategyPlanner:
                 return "COMPLEX", None
 
         # --- 유효 형상 필터링 (Major Feature Filtering) ---
-        # 전체 부품 크기 대비 15% 미만의 자잘한 구멍(볼트 구멍 등)은 과감히 O-grid 대상에서 무시합니다.
         all_curved = cylinders + conicals
         cyl_radii = [c.get("radius", 0) for c in all_curved]
         max_r = max(cyl_radii) if cyl_radii else 1.0
         threshold_radius = max_r * 0.15
         major_cyls = [c for c in all_curved if c.get("radius", 0) >= threshold_radius]
         
-        # 외부 경계(Solid)와 내부 구멍(Hole) 명확히 분리
-        outer_cyls = [c for c in major_cyls if not c.get("is_internal", False)]
-        inner_cyls = [c for c in major_cyls if c.get("is_internal", False)]
+        # 외부 돌출부(Boss)와 내부 구멍(Hole) 분류
+        inner_cyls = [c for c in major_cyls if c.get("is_internal", True)]
+        outer_cyls = [c for c in major_cyls if not c.get("is_internal", True)]
         
-        # 메인 축 결정 (가장 큰 '외부' 원통 기준, 없으면 전체 중 큰 것, 없으면 곡면 기준)
+        # [지능형 판단] 주축 결정 시 외부 원통(Boss/Shell)을 우선하되 구멍도 고려
+        largest_cyl = None
         if outer_cyls:
             largest_cyl = max(outer_cyls, key=lambda c: c.get("radius", 0))
-            main_axis = np.array(largest_cyl["axis"])
-        elif cylinders:
-            largest_cyl = max(cylinders, key=lambda c: c.get("radius", 0))
-            main_axis = np.array(largest_cyl["axis"])
-        elif bends:
-            # 실린더가 없고 곡면만 있는 경우
-            main_axis = np.array([0, 0, 1]) # 기본값
-            largest_cyl = None
-        else:
-            main_axis = np.array([0, 0, 1])
-            largest_cyl = None
+        elif inner_cyls:
+            largest_cyl = max(inner_cyls, key=lambda c: c.get("radius", 0))
+
+        if not largest_cyl:
+            return "COMPLEX", None
+
+        main_axis = np.array(largest_cyl["axis"])
 
         # 1. 꺾임 관 (Bent Pipe) - 트랜스버스 컷
         cyls_with_axis = [c for c in major_cyls if "axis" in c and "origin" in c]
@@ -70,16 +66,24 @@ class StrategyPlanner:
                     cut_key = tuple(orig) + tuple(np.abs(ax))
                     if cut_key not in unique_cuts:
                         unique_cuts.append(cut_key)
-                        plans.append(self._generate_transverse_split_plan(body_data, cyl, i))
-                return "BENT_PIPE", self._apply_beta_options(plans, body_data)
+                        # [시니어 지능] 교차로 코어 블록화 전략
+                        # 단일 컷 대신, 교차점 주변을 파이프 반경만큼 앞뒤로 잘라 코어를 가둡니다.
+                        radius = cyl.get("radius", 20.0)
+                        axis = np.array(cyl["axis"])
+                        pos = np.array(cyl["origin"])
+                        
+                        # 교차점 기준 앞뒤로 분할 (Core Isolation)
+                        plans.append(self._generate_axial_split_plan(body_data, np.dot(pos + axis*radius, axis), axis))
+                        plans.append(self._generate_axial_split_plan(body_data, np.dot(pos - axis*radius, axis), axis))
+                        print(f" - Junction Core Isolation added for Pipe_{i}")
+                
+                return "JUNCTION_CORE", self._apply_beta_options(plans, body_data)
 
         # 2. 토로이달 곡면 (Elbow Pipe) 처리
-        if bends:
-            for bend in bends:
-                origin = bend.get("origin", [0,0,0])
-                axis_idx = np.argmax(np.abs(main_axis))
-                split_coord = origin[axis_idx]
-                plans.append(self._generate_axial_split_plan(body_data, split_coord, main_axis))
+        # [지능형 필터] 반지름이 너무 작은 토로이달 면은 엘보우가 아니라 '필렛(Fillet)'입니다.
+        major_bends = [b for b in bends if b.get("radius", 0) > 10.0] # 10mm 이상만 엘보우로 인정
+        if major_bends:
+            plans.append(self._generate_elbow_split_plan(body_data, major_bends[0]))
             return "ELBOW_PIPE", self._apply_beta_options(plans, body_data)
 
         # 3. 범용 축대칭 분할 (AXISYMMETRIC)
@@ -98,27 +102,45 @@ class StrategyPlanner:
             else:
                 plans.append(self._generate_ogrid_plan(body_data, hole, f"SideHole_{i}"))
 
-        # 3-2. 메인 축방향 구멍(Main Hole) 다중 O-grid 처리
-        # 모든 주요 평행 구멍들에 대해 겹겹이 코어 분할을 적용하여 격자 품질을 극대화합니다.
-        parallel_holes = [c for c in parallel_major_cyls if c.get("is_internal", False)]
-        parallel_holes.sort(key=lambda c: c.get("radius", 0), reverse=True) # 바깥쪽 구멍부터 순차적 계획
-        for i, hole in enumerate(parallel_holes):
-            plans.append(self._generate_ogrid_plan(body_data, hole, f"MainHole_{i}"))
-            print(f" - Multi-Hole O-grid added: Hole_{i} (r={hole['radius']:.2f})")
+        # 3-2. 몸체 특성 파악 (박스 기반 여부)
+        is_block_based = len(planes) > len(cylinders) + 2
+        is_perforated = len(inner_cyls) >= 4 
 
-        # 3-3. 중심축 기준 십자 분할 (Sector Split)
-        if largest_cyl:
+        # 3-3. 메인 축방향 구멍 및 돌출부 (Main Hole & Boss) O-grid 처리
+        for i, feat in enumerate(parallel_major_cyls):
+            if feat.get("is_internal", True) or is_block_based:
+                plans.append(self._generate_ogrid_plan(body_data, feat, f"Feature_{i}"))
+                feat_type = "Hole" if feat.get("is_internal", True) else "Boss"
+                print(f" - {feat_type} O-grid added: {feat_type}_{i} (r={feat['radius']:.2f})")
+
+        # 3-4. 중심축 기준 십자 분할 (Sector Split)
+        if largest_cyl and not is_block_based and not is_perforated:
             origin = np.array(largest_cyl["origin"])
             plans.extend(self._generate_sector_split_plan(body_data, main_axis, origin))
+        elif is_block_based or is_perforated:
+            reason = "Block-based" if is_block_based else "Perforated"
+            print(f" - {reason} body detected. Skipping Sector splits for better mesh quality.")
+            # 다공판이나 박스형은 십자 분할 대신 몸통 가로지르는 H-grid만 제한적으로 적용
+            if not is_perforated: # 다공판은 H-grid도 조심스러우므로 박스일 때만 적용
+                plans.extend(self._generate_hgrid_plan(body_data, planes))
         
         # 3-4. 축 방향 단차 및 피쳐 격리 (Axial Split + Intelligent Merge)
-        # 모든 주요 실린더/콘의 시작/끝 지점을 추적합니다.
+        # 모든 주요 실린더/콘의 시작/끝 지점을 추적합니다. (막힌 구멍, 보스 포함)
         raw_z_splits = []
         axis_idx = np.argmax(np.abs(main_axis))
-        for feat in parallel_major_cyls:
-            for val in [feat["box"]["min"][axis_idx], feat["box"]["max"][axis_idx]]:
-                raw_z_splits.append(val)
         
+        # 부품의 전체 범위를 파악하여 '막힌' 구멍인지 판단하는 기준으로 사용
+        all_min = np.min([f["box"]["min"][axis_idx] for f in faces], axis=0)
+        all_max = np.max([f["box"]["max"][axis_idx] for f in faces], axis=0)
+        
+        for feat in major_cyls:
+            z_min = feat["box"]["min"][axis_idx]
+            z_max = feat["box"]["max"][axis_idx]
+            
+            # [지능형 단차 포착] 구멍이나 보스가 부품 끝까지 뚫려있지 않다면 그곳이 단차입니다.
+            if not np.isclose(z_min, all_min, atol=1.0): raw_z_splits.append(z_min)
+            if not np.isclose(z_max, all_max, atol=1.0): raw_z_splits.append(z_max)
+            
         raw_z_splits.sort()
         # [핵심] 지능형 단차 병합: 0.5mm 이하의 미세한 틈은 하나로 합쳐서 슬리버 바디 방지
         merged_z = []
@@ -128,13 +150,17 @@ class StrategyPlanner:
                 if z - merged_z[-1] > 0.5: # 0.5mm 병합 임계값
                     merged_z.append(z)
         
-        for z in merged_z[1:-1]:
-            plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
+        # 중복 제거 및 유효 지점만 추가
+        for z in merged_z:
+            if not np.isclose(z, all_min, atol=1.0) and not np.isclose(z, all_max, atol=1.0):
+                plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
+                print(f" - Feature Transition Split added at Z={z:.2f}")
 
         # 3-5. 대칭성 체크 및 조언 추가
         self._add_symmetry_advice(body_data, plans)
 
-        return "AXISYMMETRIC", self._apply_beta_options(plans, body_data)
+        strategy_name = "BOX_JUNCTION" if is_block_based else "AXISYMMETRIC"
+        return strategy_name, self._apply_beta_options(plans, body_data)
 
     def _apply_beta_options(self, plans, body_data):
         """

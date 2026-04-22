@@ -1,136 +1,47 @@
 import cadquery as cq
-import json
 import os
-import random
+import json
+from feature_library import FeatureLibrary
 
 class CADGenerator:
-    """
-    CadQuery를 이용해 무작위 STEP 파일과 정답지(JSON)를 생성하는 모듈.
-    """
     def __init__(self, output_dir="validator/data"):
         self.output_dir = output_dir
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        self.lib = FeatureLibrary()
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
 
-    def generate_test_case(self, level=1, name="test_model"):
-        if level == 1:
-            return self._generate_lv1_cylinder(name)
-        elif level == 2:
-            return self._generate_lv2_stepped(name)
-        elif level == 3:
-            return self._generate_lv3_perforated_disk(name)
-        elif level == 9:
-            return self._generate_lv9_curved_pipe(name)
-        return None
-
-    def _generate_lv1_cylinder(self, name):
-        radius = round(random.uniform(10, 40), 2)
-        height = round(random.uniform(50, 100), 2)
+    def generate_final_boss(self):
+        """[Lv.4 Super Compound] 모든 피쳐가 섞인 최종 보스 모델 생성"""
+        print("🔥 Generating Lv.4 Final Boss Model (Robust Version)...")
+        # 1. 몸체
+        result = cq.Workplane("XY").box(150, 150, 60)
         
-        # CadQuery 모델 생성
-        result = cq.Workplane("XY").circle(radius).extrude(height)
+        # 2. 피쳐 A: 막힌 구멍 (Top)
+        result = result.faces(">Z").workplane().circle(20).cutBlind(-40)
         
-        # 파일 저장
-        step_path = os.path.join(self.output_dir, f"{name}.step")
+        # 3. 피쳐 B: 돌출 보스 (Side X)
+        result = result.faces(">X").workplane().circle(25).extrude(30)
+        
+        # 4. 피쳐 C: 관통 구멍 (Side Y)
+        result = result.faces(">Y").workplane().circle(15).cutThruAll()
+        
+        # 5. 피쳐 D: 필렛 추가 (구멍 모서리 생략하고 몸체 모서리에 추가하여 Transition 테스트)
+        result = result.edges("|Z").fillet(3.0)
+        
+        features = [
+            {"type": "Cylinder", "name": "BlindHole", "is_internal": True},
+            {"type": "Cylinder", "name": "Boss", "is_internal": False},
+            {"type": "Cylinder", "radius": 15, "is_internal": True}
+        ]
+        
+        step_path = os.path.join(self.output_dir, "lv4_final_boss.step")
         cq.exporters.export(result, step_path)
+        with open(os.path.join(self.output_dir, "lv4_final_boss_gt.json"), "w") as f:
+            json.dump({"name": "lv4_final_boss", "expected_features": features}, f, indent=4)
         
-        # 정답지(Ground Truth) 저장
-        gt_data = {
-            "name": name,
-            "level": 1,
-            "expected_features": [
-                {"type": "Cylinder", "radius": radius, "height": height, "axis": [0,0,1]}
-            ]
-        }
-        gt_path = os.path.join(self.output_dir, f"{name}_gt.json")
-        with open(gt_path, "w", encoding="utf-8") as f:
-            json.dump(gt_data, f, indent=4)
-            
-        return step_path, gt_path
-
-    def _generate_lv2_stepped(self, name):
-        r1 = round(random.uniform(30, 40), 2)
-        r2 = round(random.uniform(15, 25), 2)
-        h1 = round(random.uniform(30, 50), 2)
-        h2 = round(random.uniform(30, 50), 2)
-        
-        # 2단 실린더 생성
-        result = (cq.Workplane("XY")
-                  .circle(r1).extrude(h1)
-                  .faces(">Z").workplane()
-                  .circle(r2).extrude(h2))
-        
-        step_path = os.path.join(self.output_dir, f"{name}.step")
-        cq.exporters.export(result, step_path)
-        
-        gt_data = {
-            "name": name,
-            "level": 2,
-            "expected_features": [
-                {"type": "Cylinder", "radius": r1, "height": h1, "origin": [0,0,0]},
-                {"type": "Cylinder", "radius": r2, "height": h2, "origin": [0,0,h1]}
-            ]
-        }
-        gt_path = os.path.join(self.output_dir, f"{name}_gt.json")
-        with open(gt_path, "w", encoding="utf-8") as f:
-            json.dump(gt_data, f, indent=4)
-            
-        return step_path, gt_path
-
-    def _generate_lv3_perforated_disk(self, name):
-        outer_r = 60.0
-        thick = 10.0
-        num_holes = 6
-        hole_r = 5.0
-        dist = 40.0
-        
-        # 메인 원판
-        result = cq.Workplane("XY").circle(outer_r).extrude(thick)
-        
-        # 구멍 뚫기 (polarArray 사용하여 정확하게 배치)
-        result = (result.faces(">Z").workplane()
-                  .polarArray(radius=dist, startAngle=0, angle=360, count=num_holes)
-                  .circle(hole_r).cutThruAll())
-        
-        step_path = os.path.join(self.output_dir, f"{name}.step")
-        cq.exporters.export(result, step_path)
-        
-        gt_data = {
-            "name": name, "level": 3,
-            "expected_features": [{"type": "Cylinder", "radius": outer_r, "role": "Main"}] + 
-                                [{"type": "Cylinder", "radius": hole_r, "role": "Hole"} for _ in range(num_holes)]
-        }
-        gt_path = os.path.join(self.output_dir, f"{name}_gt.json")
-        with open(gt_path, "w", encoding="utf-8") as f:
-            json.dump(gt_data, f, indent=4)
-        return step_path, gt_path
-
-    def _generate_lv9_curved_pipe(self, name):
-        # 속이 뻥 뚫린 이중 파이프 (내외경 판별 완벽 증명용)
-        outer_r = 20.0
-        inner_r = 10.0
-        height = 100.0
-        result = (cq.Workplane("XY")
-                  .circle(outer_r).circle(inner_r) # 두 개의 원을 그리면 자동으로 속이 빔
-                  .extrude(height))
-        
-        step_path = os.path.join(self.output_dir, f"{name}.step")
-        cq.exporters.export(result, step_path)
-        
-        gt_data = {
-            "name": name, "level": 9,
-            "expected_features": [{"type": "Cylinder", "radius": outer_r, "is_internal": False},
-                                 {"type": "Cylinder", "radius": inner_r, "is_internal": True}]
-        }
-        gt_path = os.path.join(self.output_dir, f"{name}_gt.json")
-        with open(gt_path, "w", encoding="utf-8") as f:
-            json.dump(gt_data, f, indent=4)
-        return step_path, gt_path
+        print(f"Final Boss model generated: {step_path}")
+        return result
 
 if __name__ == "__main__":
     gen = CADGenerator()
-    gen.generate_test_case(1, "auto_cylinder")
-    gen.generate_test_case(2, "auto_stepped")
-    gen.generate_test_case(3, "auto_perforated")
-    gen.generate_test_case(9, "auto_curved")
-    print("Test models (Cylinder, Stepped, Perforated, Curved) generated.")
+    gen.generate_final_boss()
