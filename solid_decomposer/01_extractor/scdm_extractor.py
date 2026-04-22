@@ -2,16 +2,14 @@
 import json
 import os
 
+# ==========================================
+# [사용자 설정] 저장할 경로를 아래에 입력하세요.
+# 예: r"C:\Projects\antigravity\solid_decomposer\data\geometry_data_block.json"
+# ==========================================
+OUTPUT_PATH = r"C:\path\to\your\data\geometry_data_block.json"
+
 def export_geometry_data():
-    current_dir = os.path.dirname(os.path.realpath(__file__))
-    project_root = os.path.dirname(current_dir)
-    data_dir = os.path.join(project_root, "data")
-    
-    if not os.path.exists(data_dir):
-        try: os.makedirs(data_dir)
-        except: data_dir = os.getcwd()
-        
-    output_path = os.path.join(data_dir, "geometry_data_block.json")
+    print("--- Starting Geometry Extraction ---")
     
     data = {
         "sub_device_name": "DEVICE",
@@ -19,12 +17,15 @@ def export_geometry_data():
         "bodies": []
     }
     
+    # 1. 바디 목록 가져오기
     try:
         bodies = GetRootPart().GetAllBodies()
-    except:
-        print("Error: Could not get bodies.")
+        print("Found {0} bodies in Root Part.".format(bodies.Count))
+    except Exception as e:
+        print("Error: Could not access Root Part bodies. " + str(e))
         return
 
+    # 2. 바디 순회
     for i, body in enumerate(bodies):
         try:
             b_name = body.Name
@@ -40,8 +41,7 @@ def export_geometry_data():
             
             for f_idx, face in enumerate(body.Faces):
                 try:
-                    # [핵심 수정] DesignFace와 일반 Face 모두 대응
-                    # DesignFace는 .Shape를 거쳐야 Geometry에 접근 가능합니다.
+                    # DesignFace와 일반 Face 모두 대응
                     target_face = face
                     if hasattr(face, "Shape"):
                         target_face = face.Shape
@@ -49,11 +49,11 @@ def export_geometry_data():
                     geom = target_face.Geometry
                     if not geom: continue
                     
-                    # 타입 판별
+                    # 타입 판별 (Enum 혹은 ClassName)
                     face_type = "Unknown"
                     try:
                         face_type = geom.GetType().Name
-                        if hasattr(geom, "Shape"): # GeometryShape Enum
+                        if hasattr(geom, "Shape"):
                             face_type = str(geom.Shape)
                     except: pass
                     
@@ -71,24 +71,34 @@ def export_geometry_data():
                         face_data["radius"] = geom.Radius
                         face_data["origin"] = [geom.Frame.Origin.X, geom.Frame.Origin.Y, geom.Frame.Origin.Z]
                         face_data["axis"] = [geom.Frame.Axis.Z.X, geom.Frame.Axis.Z.Y, geom.Frame.Axis.Z.Z]
-                        face_data["is_internal"] = target_face.IsInternal # Face 객체에서 추출
+                        face_data["is_internal"] = target_face.IsInternal
                     elif "Plane" in face_type:
                         face_data["origin"] = [geom.Frame.Origin.X, geom.Frame.Origin.Y, geom.Frame.Origin.Z]
                         face_data["normal"] = [geom.Frame.Axis.Z.X, geom.Frame.Axis.Z.Y, geom.Frame.Axis.Z.Z]
                         
                     body_info["faces"].append(face_data)
-                except Exception as e:
-                    # print("Face error: " + str(e))
+                except:
                     continue
             
             body_info["face_count"] = len(body_info["faces"])
             data["bodies"].append(body_info)
+            print(" - Processed Body {0}: {1}".format(i+1, b_name))
         except:
             continue
             
-    with open(output_path, 'w') as f:
-        json.dump(data, f, indent=4)
-    print("Success! Data saved to: " + output_path)
+    # 3. 파일 저장
+    try:
+        # 폴더가 없으면 생성 시도
+        target_dir = os.path.dirname(OUTPUT_PATH)
+        if target_dir and not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+            
+        with open(OUTPUT_PATH, 'w') as f:
+            json.dump(data, f, indent=4)
+        print("--- Extraction Finished! ---")
+        print("Saved to: " + OUTPUT_PATH)
+    except Exception as e:
+        print("Failed to save file: " + str(e))
 
-if __name__ == "__main__":
-    export_geometry_data()
+# 실행
+export_geometry_data()
