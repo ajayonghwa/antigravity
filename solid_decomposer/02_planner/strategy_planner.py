@@ -102,26 +102,38 @@ class StrategyPlanner:
             else:
                 plans.append(self._generate_ogrid_plan(body_data, hole, f"SideHole_{i}"))
 
-        # 3-2. 몸체 특성 파악 (박스 기반 여부)
+        # [지능형 판단] 몸체 특성 파악 (박스 기반, 다공판, 비대칭 피쳐 여부)
         is_block_based = len(planes) > len(cylinders) + 2
         is_perforated = len(inner_cyls) >= 4 
+        
+        # [핵심] 비대칭 피쳐 감지: 90도 각도에 정렬되지 않은 평면이 있으면 '비대칭'으로 간주
+        has_asymmetric_feature = False
+        for p in planes:
+            norm = np.abs(np.array(p.get("normal", [0,0,1])))
+            # X, Y, Z 축과 정렬되지 않은 평면이 있는지 확인 (0, 1 외의 값)
+            if not any(np.isclose(norm, [1,0,0], atol=0.01)) and \
+               not any(np.isclose(norm, [0,1,0], atol=0.01)) and \
+               not any(np.isclose(norm, [0,0,1], atol=0.01)):
+                has_asymmetric_feature = True
+                break
 
-        # 3-3. 메인 축방향 구멍 및 돌출부 (Main Hole & Boss) O-grid 처리
+        # 3-3. 메인 축방향 O-grid 처리 (최우선 순위)
+        # 이제 모든 주요 원기둥(Hole & Solid Body)에 대해 O-grid 코어 분할을 시도합니다.
         for i, feat in enumerate(parallel_major_cyls):
-            if feat.get("is_internal", True) or is_block_based:
-                plans.append(self._generate_ogrid_plan(body_data, feat, f"Feature_{i}"))
-                feat_type = "Hole" if feat.get("is_internal", True) else "Boss"
-                print(f" - {feat_type} O-grid added: {feat_type}_{i} (r={feat['radius']:.2f})")
+            # 격자 품질을 위해 원기둥은 무조건 O-grid를 추천합니다.
+            plans.append(self._generate_ogrid_plan(body_data, feat, f"Core_{i}"))
+            print(f" - Core O-grid added: {feat['type']}_{i} (r={feat['radius']:.2f})")
 
         # 3-4. 중심축 기준 십자 분할 (Sector Split)
-        if largest_cyl and not is_block_based and not is_perforated:
+        # [지능형 억제] 비대칭 피쳐가 있거나, 박스 기반이면 90도 분할은 위험하므로 금지합니다.
+        if largest_cyl and not is_block_based and not is_perforated and not has_asymmetric_feature:
             origin = np.array(largest_cyl["origin"])
             plans.extend(self._generate_sector_split_plan(body_data, main_axis, origin))
-        elif is_block_based or is_perforated:
-            reason = "Block-based" if is_block_based else "Perforated"
-            print(f" - {reason} body detected. Skipping Sector splits for better mesh quality.")
-            # 다공판이나 박스형은 십자 분할 대신 몸통 가로지르는 H-grid만 제한적으로 적용
-            if not is_perforated: # 다공판은 H-grid도 조심스러우므로 박스일 때만 적용
+        else:
+            reason = "Asymmetric" if has_asymmetric_feature else ("Block-based" if is_block_based else "Perforated")
+            print(f" - {reason} feature detected. Suppressing 90-deg Sector splits to prevent Boolean errors.")
+            # 십자 분할 대신 안전한 H-grid나 Axial 분할만 수행
+            if not is_perforated:
                 plans.extend(self._generate_hgrid_plan(body_data, planes))
         
         # 3-4. 축 방향 단차 및 피쳐 격리 (Axial Split + Intelligent Merge)

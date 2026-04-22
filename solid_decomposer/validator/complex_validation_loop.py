@@ -68,7 +68,8 @@ def run_phase2_validation():
         "validator/data/lv2_blind_hole_fillet.step",
         "validator/data/lv2_boss_plate.step",
         "validator/data/lv3_t_junction.step",
-        "validator/data/lv4_final_boss.step"
+        "validator/data/lv4_final_boss.step",
+        "validator/data/lv5_asymmetric_disk.step"
     ]
     
     print("🔬 [Virtual Lab: Phase 2] Testing Junction Recognition...")
