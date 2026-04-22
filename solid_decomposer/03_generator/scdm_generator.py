@@ -86,28 +86,23 @@ def apply_hgrid(target_full_name, origin_list, normal_list, ns_names):
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
-    # 시각화를 위한 평면(Datum Plane) 생성 및 보존
+    # 1. 시각적 평면 도구 생성
+    tool_plane = None
     try:
-        DesignPlane.Create(tool_comp, "Cutter_HGrid_at_Z_" + str(round(origin.Z, 2)), plane_geom)
+        tool_plane = DesignPlane.Create(tool_comp, "Cutter_HGrid_Z" + str(round(origin.Z, 1)), plane_geom)
     except: pass
 
     bodies = GetRootPart().GetAllBodies()
-    targets = []
-    for b in bodies:
-        b_full = b.Name
-        try:
-            fn = getattr(b, 'GetFullName', None)
-            if fn: b_full = fn()
-        except: pass
-        if "/".join(b_full.split("/")[:-1]) == target_path and b_full.split("/")[-1].startswith(target_base):
-            targets.append(b)
-
+    targets = [b for b in bodies if "/".join(b.Name.split("/")[:-1]) == target_path and b.Name.split("/")[-1].startswith(target_base)]
     if not targets: return
 
     for target in targets:
         try:
-            # 평면 객체를 직접 사용하여 분할 (더 안정적임)
-            SplitBody.ByCutter(Selection.Create(target), plane_geom)
+            # 2. [핵심] 생성된 실물 평면을 도구로 사용 (보존 옵션 True)
+            if tool_plane:
+                SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_plane), True)
+            else:
+                SplitBody.ByCutter(Selection.Create(target), plane_geom)
         except: pass
 
 def apply_sector(target_full_name, origin_list, normal_list, ns_names):
@@ -119,25 +114,22 @@ def apply_sector(target_full_name, origin_list, normal_list, ns_names):
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
-    # 시각화용 평면 추가
+    # 1. 시각적 평면 도구 생성
+    tool_plane = None
     try:
-        DesignPlane.Create(tool_comp, "Cutter_Sector_Normal_" + str(round(normal.X, 1)), plane_geom)
+        tool_plane = DesignPlane.Create(tool_comp, "Cutter_Sector_N" + str(round(normal.X, 1)), plane_geom)
     except: pass
     
     bodies = GetRootPart().GetAllBodies()
-    targets = []
-    for b in bodies:
-        b_full = b.Name
-        try:
-            fn = getattr(b, 'GetFullName', None)
-            if fn: b_full = fn()
-        except: pass
-        if "/".join(b_full.split("/")[:-1]) == target_path and b_full.split("/")[-1].startswith(target_base):
-            targets.append(b)
-            
+    targets = [b for b in bodies if "/".join(b.Name.split("/")[:-1]) == target_path and b.Name.split("/")[-1].startswith(target_base)]
+    
     if targets:
         try:
-            SplitBody.ByCutter(Selection.Create(targets), plane_geom)
+            # 2. [핵심] 생성된 실물 평면을 도구로 사용 (보존 옵션 True)
+            if tool_plane:
+                SplitBody.ByCutter(Selection.Create(targets), Selection.Create(tool_plane), True)
+            else:
+                SplitBody.ByCutter(Selection.Create(targets), plane_geom)
         except: pass
 
 def finalize():
