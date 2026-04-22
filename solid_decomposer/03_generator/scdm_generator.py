@@ -83,32 +83,40 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
             
             tool_body = None
             try:
-                # [수정] .Edge 대신 객체 자체를 Selection으로 생성 (가장 범용적)
+                # [무적 로직] 실행 전 바디 목록 기록
+                bodies_before = list(GetRootPart().GetAllBodies())
                 sel = Selection.Create(design_curve)
-                # [강화] 직접 호출 및 인자 개수 대응
+                
                 try:
                     # 4개 인자 방식 시도
-                    result = ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+                    ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
                 except:
-                    # 5개 인자 방식(방향 포함) 시도
-                    result = ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+                    # 5개 인자 방식 시도
+                    ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
                 
-                if result.CreatedBodies.Count > 0:
-                    tool_body = result.CreatedBodies[0]
+                # 실행 후 새로 생긴 바디 찾기
+                bodies_after = list(GetRootPart().GetAllBodies())
+                new_bodies = [b for b in bodies_after if b not in bodies_before]
+                if new_bodies:
+                    tool_body = new_bodies[0]
+                
             except Exception as e:
                 print("Extrude error: " + str(e))
                 # [최종 보루] Pull 도구 시도
                 try:
-                    result = Pull.Execute(Selection.Create(design_curve), direction, extrude_dist, PullOptions(), None)
-                    if result.CreatedBodies.Count > 0: tool_body = result.CreatedBodies[0]
+                    bodies_before = list(GetRootPart().GetAllBodies())
+                    Pull.Execute(Selection.Create(design_curve), direction, extrude_dist, PullOptions(), None)
+                    bodies_after = list(GetRootPart().GetAllBodies())
+                    new_bodies = [b for b in bodies_after if b not in bodies_before]
+                    if new_bodies: tool_body = new_bodies[0]
                 except: pass
             
             if tool_body:
                 tool_body.Name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
                 ALL_CUTTERS.append(tool_body)
                 try:
-                    # [강화] SplitBody 직접 호출
-                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
+                    # [최종 확인된 형식] 4개 인자: Target, Cutter, Boolean, Info
+                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
                 except: pass
             
             design_curve.Delete()
@@ -130,7 +138,8 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
     for target in targets:
         try:
             cutter_sel = Selection.Create(tool_plane) if tool_plane else plane_geom
-            SplitBody.ByCutter(Selection.Create(target), cutter_sel, True)
+            # [최종 확인된 형식] 4개 인자: Target, Cutter, Boolean, Info
+            SplitBody.ByCutter(Selection.Create(target), cutter_sel, True, None)
         except: pass
 
 def finalize():
