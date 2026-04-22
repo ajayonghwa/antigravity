@@ -58,9 +58,10 @@ class StrategyPlanner:
         # O-grid 추가
         for i, feat in enumerate(unique_axes):
             plan = self._generate_ogrid_plan(body_data, feat, f"Core_{i}")
-            plans.append(plan)
-            # [수치 통일] 반경이 아닌 '코어 오프셋' 수치를 출력하여 혼란 방지
-            print(f" - Core O-grid added: {feat['type']} (Offset={plan['core_offset']*self.display_scale:.1f}mm)")
+            if plan:
+                plans.append(plan)
+                # [수치 통일] 반경이 아닌 '코어 오프셋' 수치를 출력하여 혼란 방지
+                print(f" - Core O-grid added: {feat['type']} (Offset={plan['core_offset']*self.display_scale:.1f}mm)")
 
         # 3. 90도 섹터 분할 (Sector Split)
         # 메인 원통이 있고 충분히 크다면 십자 분할을 추가합니다.
@@ -95,7 +96,8 @@ class StrategyPlanner:
         b_max = np.max([f["box"]["max"][axis_idx] for f in faces])
         
         for z in merged_z:
-            if z > b_min + 0.0005 and z < b_max - 0.0005:
+            # [강화] 1mm(0.001m) 여유를 두어 확실하게 상/하면 분할 방지
+            if z > b_min + 0.001 and z < b_max - 0.001:
                 plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
                 print(f" - Axial Split at Z={z*self.display_scale:.1f}mm")
 
@@ -119,26 +121,43 @@ class StrategyPlanner:
         return plans
 
     def _generate_ogrid_plan(self, body_data, cylinder_face, hole_id="Core"):
-        origin = np.array(cylinder_face["origin"])
+        # [수정] 면의 origin 대신 바운딩 박스의 중심을 사용하여 드리프트 방지
+        box = cylinder_face.get("box", {"min": [0,0,0], "max": [0,0,0]})
+        origin = (np.array(box["min"]) + np.array(box["max"])) / 2.0
+        
         axis = np.array(cylinder_face["axis"])
         radius = cylinder_face.get("radius", 1.0)
-        # 초기 코어 오프셋은 반경의 60%
         core_offset = radius * 0.6
         
+        # [신규] 외곽 구멍 필터링 (메인 축에서 너무 멀면 제외)
+        # 메인 원통들의 최대 범위를 기준으로 판단 (단순화를 위해 바운딩 박스 활용)
+        all_faces = body_data.get("faces", [])
+        all_curved = [f for f in all_faces if "Cylinder" in f["type"]]
+        if all_curved:
+            max_r = max([f.get("radius", 0) for f in all_curved])
+            main_origin = np.array(max(all_curved, key=lambda f: f.get("radius", 0))["origin"])
+            dist_from_center = np.linalg.norm(np.cross(axis, origin - main_origin))
+            if dist_from_center > max_r * 0.7:
+                print(f" - Skipping O-grid for peripheral hole (dist={dist_from_center*self.display_scale:.1f}mm)")
+                return None
+
         # [강화된 지능형 회피]
         faces = body_data.get("faces", [])
         for hole in [f for f in faces if "Cylinder" in f["type"] and f != cylinder_face]:
             feat_axis = np.array(hole["axis"])
             if np.isclose(np.abs(np.dot(axis, feat_axis)), 1.0, atol=0.01):
-                dist = np.linalg.norm(np.cross(axis, np.array(hole["origin"]) - origin))
-                if dist < 0.001: continue # 동심원은 이미 처리됨
+                # 여기도 바운딩 박스 중심 기준 거리 계산
+                h_box = hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
+                h_center = (np.array(h_box["min"]) + np.array(h_box["max"])) / 2.0
+                dist = np.linalg.norm(np.cross(axis, h_center - origin))
+                
+                if dist < 0.001: continue 
                 
                 h_rad = hole.get("radius", 0.0)
-                # 커터들끼리 겹치지 않도록 마진을 15mm(0.015m)로 확대
                 safe_limit = dist - h_rad - 0.015
                 if core_offset > safe_limit:
                     core_offset = max(safe_limit, radius * 0.15)
-                    print(f" - Tight space detected! Reducing O-grid offset to {core_offset*self.display_scale:.1f}mm to avoid near hole.")
+                    print(f" - Tight space detected! Reducing O-grid offset to {core_offset*self.display_scale:.1f}mm.")
 
         return {
             "strategy": "OGRID",

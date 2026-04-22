@@ -61,23 +61,33 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, max_r, id
     targets = get_matching_bodies(target_full_name)
     for i, target_body in enumerate(targets):
         try:
-            # 커터 크기를 충분히 크게 (Unable to split 방지)
-            cutter_size = max(max_r * 2.5, 0.005) 
-            circle = Circle.Create(frame, cutter_size)
+            # 1. 원형 커브 생성
+            circle = Circle.Create(frame, core_offset)
             curve_seg = CurveSegment.Create(circle)
-            plane = Plane.Create(frame)
-            curve_array = System.Array.CreateInstance(type(curve_seg), 1)
-            curve_array[0] = curve_seg
-            math_body = Body.CreatePlanarBody(plane, curve_array)
+            
+            # 2. 원통형 서피스 생성을 위한 돌출(Extrude) 로직
+            # 타겟 바디를 충분히 관통할 수 있도록 길게 설정 (0.5m 정도)
+            extrude_dist = 0.5 
+            # 시작점을 뒤로 밀어서 양방향 관통 효과
+            start_pt = Point.Create(origin_pt.X - direction.X*extrude_dist, 
+                                    origin_pt.Y - direction.Y*extrude_dist, 
+                                    origin_pt.Z - direction.Z*extrude_dist)
+            
+            # 원통형 면 생성 (Cylinder Surface)
+            cyl_geom = Cylinder.Create(Frame.Create(start_pt, direction), core_offset)
+            # 바디의 범위를 감안하여 충분히 긴 면을 가진 math_body 생성
+            # (단순화를 위해 Cylinder 기하 형상을 직접 사용하거나 서피스 바디 생성)
+            math_body = Body.CreateCylindricalBody(Frame.Create(start_pt, direction), core_offset, extrude_dist * 2)
             
             # 완전 고유한 이름 부여
-            tool_name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
+            tool_name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
             tool_body = DesignBody.Create(GetRootPart(), tool_name, math_body)
             if tool_body: ALL_CUTTERS.append(tool_body)
             
+            # 원통형 면(Faces[0])으로 분할 실행
             SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
         except Exception as e:
-            print("O-grid error on " + target_full_name + ": " + str(e))
+            print("O-grid split skipped or failed on " + target_full_name + ": " + str(e))
 
 def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
@@ -91,10 +101,10 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
     except: tool_plane = None
 
     targets = get_matching_bodies(target_full_name)
-    if targets:
+    for target in targets:
         try:
             cutter_sel = Selection.Create(tool_plane) if tool_plane else plane_geom
-            SplitBody.ByCutter(Selection.Create(targets), cutter_sel, True)
+            SplitBody.ByCutter(Selection.Create(target), cutter_sel, True)
         except: pass
 
 def finalize():
