@@ -293,8 +293,9 @@ class StrategyPlanner:
         n2 = n2 / np.linalg.norm(n2)
         
         origin1 = np.array(origin)
-        # 십자 교차점 위상 에러 회피를 위해 두 번째 절단면을 0.01mm 미세 이동
-        origin2 = origin1 + n1 * 0.01
+        # 십자 교차점 위상 에러 회피를 위해 두 번째 절단면을 0.05mm 미세 이동
+        # (0.01mm는 CAD 공차와 겹칠 위험이 있어 0.05mm로 상향)
+        origin2 = origin1 + n1 * 0.05
         
         plans = []
         plans.append({

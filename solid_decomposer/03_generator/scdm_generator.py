@@ -9,142 +9,127 @@ class SCDMGenerator:
 import clr
 import System
 
-def apply_ogrid(body_name, center_list, axis_list, core_offset, ns_names):
-    # 1. 대상 바디들 찾기 (원본 이름과 일치하거나 분할로 인해 숫자가 붙은 모든 조각들 수집)
+def apply_ogrid(target_full_name, center_list, axis_list, core_offset, ns_names):
+    # [지능형 개선] 컴포넌트 경로 인식 및 중복 이름 대응
+    origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
+    direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
+    frame = Frame.Create(origin_pt, direction)
+    
+    target_path = "/".join(target_full_name.split("/")[:-1])
+    target_base = target_full_name.split("/")[-1]
+
     bodies = GetRootPart().GetAllBodies()
-    target_bodies = []
+    targets = []
     for b in bodies:
-        b_name = b.Name
+        b_full = b.Name
         try:
             fn = getattr(b, 'GetFullName', None)
-            if fn: b_name = fn()
-        except:
-            pass
+            if fn: b_full = fn()
+        except: pass
         
-        # [핵심 수정] 엄격한 이름 매칭 (이웃 바디 오절단 방지)
-        is_match = False
-        if b_name == body_name:
-            is_match = True
-        elif b_name.startswith(body_name + " ("):
-            is_match = True
-        elif b_name.startswith(body_name + " "):
-            is_match = True
-        
-        if is_match:
-            target_bodies.append(b)
+        b_path = "/".join(b_full.split("/")[:-1])
+        b_base = b_full.split("/")[-1]
+
+        if b_path == target_path:
+            is_match = False
+            if b_base == target_base:
+                is_match = True
+            elif b_base.startswith(target_base):
+                suffix = b_base[len(target_base):]
+                if not suffix or suffix[0].isdigit() or suffix[0] in [" ", "(", "-", "_"]:
+                    is_match = True
+            if is_match:
+                targets.append(b)
     
-    if not target_bodies:
-        print("Body not found: " + body_name)
+    if not targets:
+        print("Body not found: " + target_full_name)
         return
 
-    # 2. 모든 대상 조각에 대해 분할 시도 (평면이 지나는 조각만 실제로 잘림)
-    for target_body in target_bodies:
-        # 2. 실린더 컷팅 평면/축 설정
-        origin = Point.Create(center_list[0], center_list[1], center_list[2])
-        direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
-        frame = Frame.Create(origin, direction)
-
+    for target_body in targets:
         tool_body = None
         try:
-            # 3. 평면 표면(Surface Body) 생성 및 자르기
-            print("O-grid Splitting for piece of: " + body_name)
+            print("O-grid Splitting for: " + target_full_name)
             circle = Circle.Create(frame, core_offset)
             curve_seg = CurveSegment.Create(circle)
-            
-            # 원을 감싸는 평면 정의 (Plane.Create는 1개의 Frame 인수를 받음)
             plane = Plane.Create(frame)
             
-            # Python의 list([]) 대신 .NET의 Array를 명시적으로 생성하여 전달합니다. (타입 에러 방지)
             curve_array = System.Array.CreateInstance(type(curve_seg), 1)
             curve_array[0] = curve_seg
             
-            # 표면 바디(수학 모델) 생성 및 스페이스클레임에 실제 바디로 등록
             math_body = Body.CreatePlanarBody(plane, curve_array)
             tool_body = DesignBody.Create(GetRootPart(), "Ogrid_Tool", math_body)
             
             target_sel = Selection.Create(target_body)
-            # 생성된 원판 표면의 면(Face)을 선택
             cutter_sel = Selection.Create(tool_body.Faces[0])
             
-            # 면으로 자르기 실행 (실패하더라도 다음 조각으로 넘어가야 함)
             try:
                 res = SplitBody.ByCutter(target_sel, cutter_sel, True)
-                
-                # 분할 성공 시 네임드 셀렉션 부여 (Core / Outer 구분)
                 if res and res.Success and res.CreatedBodies.Count >= 2:
                     core_bodies = []
                     outer_bodies = []
                     for cb in res.CreatedBodies:
                         cg = cb.GetBoundingBox(Matrix.Identity).Center
-                        # Z축 방향을 제외한 반경(Radial) 거리로 구분
-                        dist = ((cg.X - origin.X)**2 + (cg.Y - origin.Y)**2)**0.5
+                        dist = ((cg.X - origin_pt.X)**2 + (cg.Y - origin_pt.Y)**2)**0.5
                         if dist < core_offset:
                             core_bodies.append(cb)
                         else:
                             outer_bodies.append(cb)
                     
-                    try:
-                        if core_bodies and "core" in ns_names:
-                            Selection.Create(core_bodies).CreateGroup(ns_names["core"])
-                        if outer_bodies and "outer" in ns_names:
-                            Selection.Create(outer_bodies).CreateGroup(ns_names["outer"])
-                    except: pass
-            except:
-                pass
-            
+                    if core_bodies and "core" in ns_names:
+                        Selection.Create(core_bodies).CreateGroup(ns_names["core"])
+                    if outer_bodies and "outer" in ns_names:
+                        Selection.Create(outer_bodies).CreateGroup(ns_names["outer"])
+            except: pass
         except Exception as e:
             print("O-grid error: " + str(e))
         finally:
-            # 성공/실패 여부와 상관없이 임시 도구는 반드시 삭제
-            if tool_body:
-                tool_body.Delete()
+            if tool_body: tool_body.Delete()
 
-def apply_hgrid(body_name, origin_list, normal_list, ns_names):
-    # 1. 대상 바디들 찾기 (분할된 조각들까지 모두 수집)
+def apply_hgrid(target_full_name, origin_list, normal_list, ns_names):
+    # [지능형 개선] 컴포넌트 경로 인식 및 중복 이름 대응
+    target_path = "/".join(target_full_name.split("/")[:-1])
+    target_base = target_full_name.split("/")[-1]
+    
     bodies = GetRootPart().GetAllBodies()
-    target_bodies = []
+    targets = []
     for b in bodies:
-        b_name = b.Name
+        b_full = b.Name
         try:
             fn = getattr(b, 'GetFullName', None)
-            if fn: b_name = fn()
+            if fn: b_full = fn()
         except: pass
         
-        base = b_name.split("/")[-1]
+        b_path = "/".join(b_full.split("/")[:-1])
+        b_base = b_full.split("/")[-1]
         
-        # [핵심 수정] 엄격한 이름 매칭 (이웃 바디 오절단 방지)
-        is_match = False
-        if base == body_name:
-            is_match = True
-        elif base.startswith(body_name + " ("): # "Body (1)" 형태 매칭
-            is_match = True
-        elif base.startswith(body_name + " "): # "Body 1" 형태 매칭
-            is_match = True
-        
-        if is_match:
-            target_bodies.append(b)
+        if b_path == target_path:
+            is_match = False
+            if b_base == target_base:
+                is_match = True
+            elif b_base.startswith(target_base):
+                suffix = b_base[len(target_base):]
+                if not suffix or suffix[0].isdigit() or suffix[0] in [" ", "(", "-", "_"]:
+                    is_match = True
+            if is_match:
+                targets.append(b)
             
-    if not target_bodies:
-        print("Body not found: " + body_name)
+    if not targets:
+        print("Body not found: " + target_full_name)
         return
 
-    # 2. 분할 평면 생성
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane = Plane.Create(Frame.Create(origin, normal))
     
-    # 3. [핵심 수정] 일괄 분할 대신 '순차적 분할'로 조각 누락 방지
-    print("Sequential Splitting fragments of: " + body_name)
+    print("Path-aware Sequential Splitting for: " + target_full_name)
     all_new_fragments = []
-    
-    for target in target_bodies:
+    for target in targets:
         try:
-            # 개별 바디에 대해 분할 실행
             res = SplitBody.ByCutter(Selection.Create(target), plane)
             if res and res.Success:
                 all_new_fragments.extend([cb for cb in res.CreatedBodies])
             else:
-                all_new_fragments.append(target) # 잘리지 않은 경우 유지
+                all_new_fragments.append(target)
         except:
             all_new_fragments.append(target)
 
@@ -157,32 +142,46 @@ def apply_hgrid(body_name, origin_list, normal_list, ns_names):
         except: pass
 
 
-def apply_sector(body_name, origin_list, normal_list, ns_names):
-    # 90도 십자 분할을 위한 전용 함수
+def apply_sector(target_full_name, origin_list, normal_list, ns_names):
+    # [지능형 개선] 컴포넌트 경로를 인식하여 중복 이름 충돌 방지
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane = Plane.Create(Frame.Create(origin, normal))
     
+    # 타겟의 부모 경로와 베이스 이름 분리
+    target_path = "/".join(target_full_name.split("/")[:-1])
+    target_base = target_full_name.split("/")[-1]
+    
     bodies = GetRootPart().GetAllBodies()
+    targets = []
     for b in bodies:
-        b_name = b.Name
+        b_full = b.Name
         try:
             fn = getattr(b, 'GetFullName', None)
-            if fn: b_name = fn().split("/")[-1]
+            if fn: b_full = fn()
         except: pass
 
-        is_match = False
-        if b_name == body_name:
-            is_match = True
-        elif b_name.startswith(body_name + " ("):
-            is_match = True
-        elif b_name.startswith(body_name + " "):
-            is_match = True
+        b_path = "/".join(b_full.split("/")[:-1])
+        b_base = b_full.split("/")[-1]
+
+        # 1. 부모 경로가 일치하고 2. 이름이 규칙에 맞는지 확인
+        if b_path == target_path:
+            is_match = False
+            if b_base == target_base:
+                is_match = True
+            elif b_base.startswith(target_base):
+                suffix = b_base[len(target_base):]
+                if not suffix or suffix[0].isdigit() or suffix[0] in [" ", "(", "-", "_"]:
+                    is_match = True
             
-        if is_match:
-            try:
-                SplitBody.ByCutter(Selection.Create(b), plane)
-            except: pass
+            if is_match:
+                targets.append(b)
+            
+    if targets:
+        try:
+            print("Path-aware Batch Splitting " + str(len(targets)) + " targets...")
+            SplitBody.ByCutter(Selection.Create(targets), plane)
+        except: pass
 
 def finalize():
     print("Applying Shared Topology for Conformal Meshing...")
