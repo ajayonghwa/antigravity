@@ -57,14 +57,15 @@ class StrategyPlanner:
 
         # O-grid 추가
         for i, feat in enumerate(unique_axes):
-            plans.append(self._generate_ogrid_plan(body_data, feat, f"Core_{i}"))
-            print(f" - Core O-grid added: {feat['type']} (r={feat['radius']*self.display_scale:.1f}mm)")
+            plan = self._generate_ogrid_plan(body_data, feat, f"Core_{i}")
+            plans.append(plan)
+            # [수치 통일] 반경이 아닌 '코어 오프셋' 수치를 출력하여 혼란 방지
+            print(f" - Core O-grid added: {feat['type']} (Offset={plan['core_offset']*self.display_scale:.1f}mm)")
 
-        # 3. 90도 섹터 분할 (Sector Split) 복구
+        # 3. 90도 섹터 분할 (Sector Split)
         # 메인 원통이 있고 충분히 크다면 십자 분할을 추가합니다.
-        if largest_cyl and largest_cyl["radius"] > 0.005: # 5mm 이상일 때만
+        if largest_cyl and largest_cyl["radius"] > 0.005:
             origin = np.array(largest_cyl["origin"])
-            # 메인 축에 수직인 두 벡터 계산
             v1 = np.array([0, 0, 0], dtype=float)
             v1[(axis_idx + 1) % 3] = 1.0
             v1 = v1 - np.dot(v1, main_axis) * main_axis
@@ -73,7 +74,7 @@ class StrategyPlanner:
             
             plans.append(self._generate_axial_split_plan(body_data, origin, v1, "Sector_A"))
             plans.append(self._generate_axial_split_plan(body_data, origin, v2, "Sector_B"))
-            print(" - 90-deg Sector splits added.")
+            print(" - 90-deg Sector cross-splits planned.")
 
         # 4. 축 방향 단차 분할 (Axial)
         all_z = []
@@ -82,18 +83,19 @@ class StrategyPlanner:
             all_z.append(feat["box"]["max"][axis_idx])
         
         all_z.sort()
+        # [강화] 병합 임계값을 2mm로 늘려 아주 인접한 단차는 하나로 처리
         merged_z = []
         if all_z:
             merged_z.append(all_z[0])
             for z in all_z[1:]:
-                if z - merged_z[-1] > 0.001: merged_z.append(z)
+                if z - merged_z[-1] > 0.002: merged_z.append(z)
         
-        # 전체 범위 경계 제외
+        # [강화] 경계면 제외 로직 (0.5mm 여유를 두어 Z=0 등 제외)
         b_min = np.min([f["box"]["min"][axis_idx] for f in faces])
         b_max = np.max([f["box"]["max"][axis_idx] for f in faces])
         
         for z in merged_z:
-            if not np.isclose(z, b_min, atol=0.001) and not np.isclose(z, b_max, atol=0.001):
+            if z > b_min + 0.0005 and z < b_max - 0.0005:
                 plans.append(self._generate_axial_split_plan(body_data, z, main_axis))
                 print(f" - Axial Split at Z={z*self.display_scale:.1f}mm")
 
@@ -120,17 +122,23 @@ class StrategyPlanner:
         origin = np.array(cylinder_face["origin"])
         axis = np.array(cylinder_face["axis"])
         radius = cylinder_face.get("radius", 1.0)
+        # 초기 코어 오프셋은 반경의 60%
         core_offset = radius * 0.6
         
-        # 간섭 회피
+        # [강화된 지능형 회피]
         faces = body_data.get("faces", [])
         for hole in [f for f in faces if "Cylinder" in f["type"] and f != cylinder_face]:
-            dist = np.linalg.norm(np.cross(axis, np.array(hole["origin"]) - origin))
-            if dist < 0.001: continue # 동심원 제외
-            
-            h_rad = hole.get("radius", 0.0)
-            if core_offset > dist - h_rad - 0.01:
-                core_offset = max(dist - h_rad - 0.01, radius * 0.2)
+            feat_axis = np.array(hole["axis"])
+            if np.isclose(np.abs(np.dot(axis, feat_axis)), 1.0, atol=0.01):
+                dist = np.linalg.norm(np.cross(axis, np.array(hole["origin"]) - origin))
+                if dist < 0.001: continue # 동심원은 이미 처리됨
+                
+                h_rad = hole.get("radius", 0.0)
+                # 커터들끼리 겹치지 않도록 마진을 15mm(0.015m)로 확대
+                safe_limit = dist - h_rad - 0.015
+                if core_offset > safe_limit:
+                    core_offset = max(safe_limit, radius * 0.15)
+                    print(f" - Tight space detected! Reducing O-grid offset to {core_offset*self.display_scale:.1f}mm to avoid near hole.")
 
         return {
             "strategy": "OGRID",
