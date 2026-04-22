@@ -136,21 +136,44 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
 def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
-    plane_geom = Plane.Create(Frame.Create(origin, normal))
+    frame = Frame.Create(origin, normal)
     
+    # [최종 전략] O-Grid와 동일하게 서피스 커터를 생성하여 분할
     try:
-        tool_name = "Cutter_" + strategy + "_" + str(idx)
-        tool_plane = DesignPlane.Create(GetRootPart(), tool_name, plane_geom)
-        if tool_plane: ALL_CUTTERS.append(tool_plane)
-    except: tool_plane = None
-
-    targets = get_matching_bodies(target_full_name)
-    for target in targets:
+        # 1. 충분히 큰 사각형 커브 생성 (바디를 다 덮을 정도)
+        size = 1.0 
+        rect = Rectangle.Create(frame, size, size)
+        design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(rect))
+        
+        # 2. 서피스로 돌출 (O-Grid 방식 재활용)
+        extrude_dist = 0.001 # 아주 얇게 돌출시켜 서피스 생성
+        bodies_before = list(GetRootPart().GetAllBodies())
+        
         try:
-            cutter_sel = Selection.Create(tool_plane) if tool_plane else plane_geom
-            # [최종 확인된 형식] 4개 인자: Target, Cutter, Boolean, Info
-            SplitBody.ByCutter(Selection.Create(target), cutter_sel, True, None)
-        except: pass
+            # 4개 인자 방식으로 돌출 시도
+            ExtrudeEdges.Execute(Selection.Create(design_curve), extrude_dist, ExtrudeEdgeOptions(), None)
+        except:
+            # 5개 인자 방식으로 재시도
+            ExtrudeEdges.Execute(Selection.Create(design_curve), Selection.Create(normal), extrude_dist, ExtrudeEdgeOptions(), None)
+            
+        bodies_after = list(GetRootPart().GetAllBodies())
+        new_bodies = [b for b in bodies_after if b not in bodies_before]
+        
+        if new_bodies:
+            tool_body = new_bodies[0]
+            tool_body.Name = "Cutter_Surface_" + strategy + "_" + str(idx)
+            ALL_CUTTERS.append(tool_body)
+            
+            # 3. 분할 실행 (검증된 4인자 방식)
+            targets = get_matching_bodies(target_full_name)
+            for target in targets:
+                try:
+                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_body.Faces[0]), True, None)
+                except: pass
+        
+        design_curve.Delete()
+    except Exception as e:
+        print(strategy + " split error: " + str(e))
 
 def finalize():
     if ALL_CUTTERS:
