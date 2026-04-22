@@ -26,16 +26,20 @@ import clr
 import System
 import math
 
-# [강화] 스페이스클레임 API 네임스페이스 명시적 임포트
-try:
-    import SpaceClaim.Api.V19.Commands as Commands
-    from SpaceClaim.Api.V19 import *
-    from SpaceClaim.Api.V19.Modeler import *
-except:
-    try:
-        import SpaceClaim.Api.V18.Commands as Commands
-        from SpaceClaim.Api.V18 import *
-    except: pass
+# [강화] 스페이스클레임 API 로드 (여러 버전 대응)
+def initialize_api():
+    for v in range(22, 16, -1):
+        try:
+            ref = "SpaceClaim.Api.V" + str(v)
+            clr.AddReference(ref)
+            exec("from SpaceClaim.Api.V" + str(v) + " import *")
+            exec("from SpaceClaim.Api.V" + str(v) + ".Modeler import *")
+            exec("from SpaceClaim.Api.V" + str(v) + ".Commands import *")
+            return True
+        except: pass
+    return False
+
+initialize_api()
 
 ALL_CUTTERS = []
 
@@ -81,13 +85,13 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
             try:
                 # [수정] .Edge 대신 객체 자체를 Selection으로 생성 (가장 범용적)
                 sel = Selection.Create(design_curve)
-                # [강화] Commands 명시적 호출 및 인자 개수 대응
+                # [강화] 직접 호출 및 인자 개수 대응
                 try:
                     # 4개 인자 방식 시도
-                    result = Commands.ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+                    result = ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
                 except:
                     # 5개 인자 방식(방향 포함) 시도
-                    result = Commands.ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+                    result = ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
                 
                 if result.CreatedBodies.Count > 0:
                     tool_body = result.CreatedBodies[0]
@@ -95,7 +99,7 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
                 print("Extrude error: " + str(e))
                 # [최종 보루] Pull 도구 시도
                 try:
-                    result = Commands.Pull.Execute(Selection.Create(design_curve), direction, extrude_dist, PullOptions(), None)
+                    result = Pull.Execute(Selection.Create(design_curve), direction, extrude_dist, PullOptions(), None)
                     if result.CreatedBodies.Count > 0: tool_body = result.CreatedBodies[0]
                 except: pass
             
@@ -103,8 +107,8 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
                 tool_body.Name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
                 ALL_CUTTERS.append(tool_body)
                 try:
-                    # [강화] SplitBody도 Commands 명시 호출
-                    Commands.SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
+                    # [강화] SplitBody 직접 호출
+                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
                 except: pass
             
             design_curve.Delete()
