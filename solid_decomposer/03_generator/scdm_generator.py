@@ -61,8 +61,9 @@ def get_matching_bodies(target_full_name):
     matched = []
     for body in all_bodies:
         b_name = body.Name
-        # 정확히 일치하거나, 분할되어 숫자가 붙은 경우(Body_1, Body_CORE 등) 모두 찾음
-        if b_name == target_base or b_name.startswith(target_base + "_") or b_name.startswith(target_base + " ("):
+        # [강화] 원래 이름으로 시작하는 모든 바디를 조각으로 간주하여 수집
+        # (예: Body, Body_1, Body (1), Body_CORE 등을 모두 포함)
+        if b_name.startswith(target_base):
             matched.append(body)
     return matched
 
@@ -131,8 +132,8 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
     
     # [최종 전략] 원을 그린 뒤 내부를 채워(Fill) 평면 서피스 커터 생성
     try:
-        # 1. 적당히 큰 원(반지름 1m) 생성
-        huge_radius = 1.0 
+        # 1. 넉넉한 크기의 원(반지름 5m) 생성 (모든 조각을 다 덮도록)
+        huge_radius = 5.0 
         circle_geom = Circle.Create(frame, huge_radius)
         design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom))
         
