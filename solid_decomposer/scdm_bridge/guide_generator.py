@@ -19,16 +19,24 @@ class GuideGenerator:
             
             # 1. O-GRID (원통형 코어 분할)
             if "OGRID" in raw_strat:
-                offset = plan.get('core_offset', 2.0)
-                if offset is None: offset = 2.0
-                lines.append(f"- **Action:** Create a circular O-grid core (offset: **{offset:.2f}mm**).")
+                # 플래너가 만든 display_offset이 있으면 우선 사용
+                display_val = plan.get('display_offset')
+                if not display_val:
+                    offset = plan.get('core_offset', 0.0)
+                    display_val = f"{offset * 1000.0:.2f}mm"
+                
+                lines.append(f"- **Action:** Create a circular O-grid core (offset: **{display_val}**).")
                 lines.append("- **Purpose:** Ensures high-quality hexa-mesh in the center of cylinders.")
             
             # 2. AXIAL (축방향 단차 분할)
             elif "AXIAL" in raw_strat:
-                origin = plan.get('split_plane', {}).get('origin', [0,0,0])
-                z_val = origin[2] if len(origin) > 2 else 0.0
-                lines.append(f"- **Action:** Split the body horizontally at **Z = {z_val:.2f}mm**.")
+                display_pos = plan.get('display_pos')
+                if not display_pos:
+                    origin = plan.get('split_plane', {}).get('origin', [0,0,0])
+                    z_val = origin[2] if len(origin) > 2 else 0.0
+                    display_pos = f"{z_val * 1000.0:.2f}mm"
+
+                lines.append(f"- **Action:** Split the body horizontally at **Z = {display_pos}**.")
                 lines.append("- **Purpose:** Isolate features or handle step changes in diameter.")
 
             # 3. SECTOR (90도 방사형 분할)

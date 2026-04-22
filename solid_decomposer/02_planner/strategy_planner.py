@@ -97,11 +97,19 @@ class StrategyPlanner:
         faces = body_data.get("faces", [])
         for hole in [f for f in faces if f["type"] in ["Cylinder", "Conical"] and f != cylinder_face]:
             if np.isclose(np.abs(np.dot(axis, np.array(hole["axis"]))), 1.0, atol=0.01):
+                # 두 중심축 사이의 거리 계산
                 dist = np.linalg.norm(np.cross(axis, np.array(hole["origin"]) - origin))
+                
+                # [수정] 동심원(Concentric)인 경우 간섭 회피 대상에서 제외
+                if dist < 0.001: 
+                    continue
+                    
                 h_rad = hole.get("radius", 0.0)
-                if core_offset > dist - h_rad - 0.01 and core_offset < dist + h_rad + 0.01:
-                    core_offset = dist - h_rad - 0.01
-                    print(f" - Adjusted O-grid offset to {core_offset*self.display_scale:.1f}mm to avoid interference.")
+                # 실제로 옆에 있는 구멍과 겹칠 위험이 있을 때만 오프셋 조정
+                if core_offset > dist - h_rad - 0.01:
+                    new_offset = dist - h_rad - 0.01
+                    core_offset = max(new_offset, radius * 0.2)
+                    print(f" - Adjusted O-grid offset to {core_offset*self.display_scale:.1f}mm to avoid near hole (dist={dist*self.display_scale:.1f}mm)")
 
         return {
             "strategy": "OGRID",

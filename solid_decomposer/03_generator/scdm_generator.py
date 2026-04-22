@@ -124,7 +124,11 @@ def finalize():
                 # None을 전달하여 새 컴포넌트를 만들고 그곳으로 이동시킵니다.
                 new_comp = ComponentHelper.MoveBodiesToComponent(selection, None)
                 if new_comp:
-                    new_comp.Name = "Decomposition_Tools"
+                    try:
+                        # Template.Name과 Name 모두 시도
+                        if hasattr(new_comp, "Template"): new_comp.Template.Name = "Decomposition_Tools"
+                        else: new_comp.Name = "Decomposition_Tools"
+                    except: pass
                     print("Successfully grouped cutters into 'Decomposition_Tools'.")
         except Exception as e:
             print("Failed to group cutters: " + str(e))
