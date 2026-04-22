@@ -1,46 +1,59 @@
-# 📘 Solid Decomposer: Automated CAD Partitioning Pipeline (v2.2)
+# 🚀 Antigravity: Solid Decomposition & Optimization Pipeline
 
-본 프로젝트는 복잡한 3D 형상을 해석 및 메쉬 최적화를 위해 자동으로 분할하는 통합 자동화 시스템입니다. 
+**Antigravity**는 복잡한 3D Solid 기하 모델을 해석 효율이 극대화된 형태로 자동 분할하고 최적화하는 통합 엔지니어링 솔루션입니다. 특히 SpaceClaim(SCDM) 환경에서의 Hexa-Mesh 기반을 마련하기 위한 지능형 분할 전략을 제공합니다.
 
-## 🚀 핵심 기능 (Key Features)
+---
 
-### 1. Dual-Engine Strategy
-- **Rule-based Engine (Default)**: 기하학적 수식을 이용한 초고속 분할. 표준 형상(Cylinder, Stepped, Perforated)에 최적화.
-- **AI-driven Engine (Advanced)**: Gemma 모델을 이용한 지능형 추론 분할. 복잡한 비정형 형상 및 접합부(Junction)에 권장.
+## 🛠️ Core Components
 
-### 2. 🛡️ Robust Partitioning Logic (v2.2 New!)
-- **Sequential Splitting & Name Matching**: 이름 뒤에 숫자가 붙는(Solid11 등) 모든 파생 조각을 추적하여 누락 없는 순차 분할을 보장합니다.
-- **Sliver Prevention (Z-Merge)**: 0.5mm 이하의 미세한 단차는 지능적으로 하나로 병합하여, 해석 시 에러를 유발하는 얇은 조각(Sliver body) 생성을 방지합니다.
-- **Tapered Shape Support**: 원기둥뿐만 아니라 테이퍼진 원뿔(Conical) 구간을 자동으로 포착하여 단차 구역을 격리합니다.
+본 프로젝트는 다음과 같은 유기적인 컴포넌트들로 구성되어 있습니다.
 
-### 3. 🕸️ High-Quality Mesh Foundation
-- **Multi-Coaxial O-grid**: 이중 관이나 다중 동축 구멍이 있는 경우, 모든 층에 대해 겹겹이 O-grid를 생성하여 최상의 Hexa 메쉬 기반을 마련합니다.
-- **Symmetry Intelligence**: 모델의 원점 대칭 여부를 자동 감지하여 1/4, 1/8 모델 활용을 통한 해석 시간 단축 가이드를 제공합니다.
+### 1. 🔍 Geometry Engine (`01_extractor` & `scdm_bridge`)
+- **Smart Extraction**: SpaceClaim 내부 기하 정보를 JSON 형태로 정밀 추출합니다.
+- **Conical & internal Detection**: 단순 원통을 넘어 테이퍼진 형상과 내부 유로(Internal flow)를 자동으로 판별합니다.
+- **Bridge**: 외부 환경과 SCDM 간의 원활한 데이터 교환을 지원합니다.
 
-### 4. 📖 Automated Human Guide
-- 스페이스클레임 스크립트 생성 시, 동일한 위치에 **`Decomposition_Guide.md`**가 자동으로 생성됩니다. 
-- 자동화가 어려운 특수한 상황에서 엔지니어가 직접 보고 따라 할 수 있는 Step-by-Step 지침을 제공합니다.
+### 2. 🧠 Strategy Planner (`02_planner` & `optimizer`)
+- **O-Grid Intelligence**: 구멍 주변의 메쉬 품질을 높이기 위한 O-Grid 분할 전략을 수립합니다.
+- **Partitioning Logic**: 90도 섹터 분할, 축 방향 단차 분할 등 최적의 Partition 순서를 결정합니다.
+- **Strategy Optimization**: 여러 분할 시나리오 중 해석 리소스를 최소화할 수 있는 최적의 안을 선정합니다.
+
+### 3. 🏗️ Script Generator (`03_generator`)
+- **Robust Execution**: 사용자 환경의 API 버전(V17~V22)을 자동 감지하고 최적화된 시그니처로 스크립트를 생성합니다.
+- **Surface Cutter Strategy**: `Fill` 및 `Extrude`를 활용한 서피스 기반 커팅으로 기하학적 연산 성공률을 극대화합니다.
+- **Body Tracking**: 분할 후 이름이 바뀌는 모든 조각을 끝까지 추적하여 연속적인 분할을 수행합니다.
+
+### 4. 🛡️ Validator & Executor (`validator` & `executor`)
+- **Geometric Validation**: 분할된 결과물이 해석에 적합한지, 간섭이나 유실은 없는지 기하학적으로 검증합니다.
+- **Auto-Run**: 생성된 스크립트를 SCDM에서 자동으로 실행하고 결과를 취합합니다.
 
 ---
 
 ## 📂 폴더 구조
 
-- **`01_extractor/`**: SpaceClaim 기하 정보 추출 엔진. (Conical 및 is_internal 판별 지원)
-- **`02_planner/`**: 분할 전략 수립. (Z-Merge 및 다중 O-grid 지능 탑재)
-- **`03_generator/`**: 순차 분할 및 자식 바디 추적 로직이 적용된 스크립트 생성기.
-- **`validator/`**: CadQuery 기반의 형상/위상 자동 검증 도구.
-
----
-
-## 🛠️ 사용 방법
-
-```bash
-# 기본 실행 (규칙 기반)
-python main_run.py [파일이름]
-
-# AI 모드 실행
-python main_run.py [파일이름] --ai
+```text
+/antigravity
+├── solid_decomposer
+│   ├── 01_extractor     # SCDM 기하 정보 추출 엔진
+│   ├── 02_planner       # 분할 전략 수립 엔진
+│   ├── 03_generator     # SCDM 실행 스크립트 생성기
+│   ├── validator        # 분할 결과 기하 검증 모듈
+│   ├── optimizer        # 분할 시나리오 최적화 엔진
+│   ├── scdm_bridge      # 외부-SCDM 통신 레이어
+│   ├── main_run.py      # 파이프라인 통합 실행 엔트리
+│   └── stable_v1_backup # [중요] 검증된 안정 버전 백업 (참고용)
+└── doc_assistant        # 엔지니어링 문서화 지원 도구
 ```
 
 ---
-*Created by Antigravity AI Coding Assistant*
+
+## 💡 개발 및 트러블슈팅 가이드
+SCDM API의 특이사항이나 빈번하게 발생하는 에러 해결 방법은 다음 문서를 참고하세요.
+- **[Troubleshooting Guide](solid_decomposer/SCDM_Automation_Troubleshooting_Guide.md)**: 4인자 API 규칙, 바디 추적 로직, 서피스 커터 전략 등 상세 기록.
+
+---
+
+## 🚦 시작하기
+1. SpaceClaim에서 `01_extractor/scdm_extractor.py`를 실행하여 기하 정보를 추출합니다.
+2. 로컬 환경에서 `python main_run.py [기기이름]`를 실행하여 최적화된 분할 스크립트를 생성합니다.
+3. 생성된 `04_scripts/xxxx_scdm_script.py`를 다시 SpaceClaim에서 실행하여 자동 분할을 완료합니다.
