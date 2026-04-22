@@ -147,7 +147,7 @@ def finalize():
 finalize()
 """
 
-    def generate_script(self, plan_list, output_filename="scdm_decomposition_script.py"):
+    def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
         execution_calls = ""
         for plan in plan_list:
             if plan["strategy"] == "OGRID":
@@ -164,7 +164,7 @@ finalize()
 
         full_script = self.script_template.format(execution_calls=execution_calls)
         
-        output_path = os.path.join(self.project_root, output_filename)
+        output_path = os.path.join(self.project_root, output_name)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(full_script)
             
