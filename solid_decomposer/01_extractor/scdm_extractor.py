@@ -3,16 +3,14 @@ import json
 import os
 
 def export_geometry_data():
-    # 1. 저장할 파일명 (스페이스클레임에서 실행 시 현재 활성 문서와 같은 경로에 생깁니다)
     output_path = "geometry_data.json"
     
     data = {
         "sub_device_name": "DEVICE",
-        "units": "m", # 기본값
+        "units": "m",
         "bodies": []
     }
     
-    # 2. 바디 순회 및 추출
     bodies = GetRootPart().GetAllBodies()
     for i, body in enumerate(bodies):
         b_name = body.Name
@@ -27,24 +25,36 @@ def export_geometry_data():
         }
         
         for f_idx, face in enumerate(body.Faces):
-            shape = str(face.Geometry.Shape)
+            # [안전한 형상 타입 추출]
+            geom = face.Geometry
+            if not geom: continue
+            
+            # 1. Shape 속성 시도 -> 2. 클래스 이름 시도 (가장 확실함)
+            face_type = "Unknown"
+            try:
+                if hasattr(geom, "Shape"):
+                    face_type = str(geom.Shape)
+                else:
+                    face_type = geom.GetType().Name
+            except:
+                face_type = geom.GetType().Name
+            
             face_data = {
                 "index": f_idx,
-                "type": shape,
+                "type": face_type,
                 "box": {
                     "min": [face.BoundingBox.Min.X, face.BoundingBox.Min.Y, face.BoundingBox.Min.Z],
                     "max": [face.BoundingBox.Max.X, face.BoundingBox.Max.Y, face.BoundingBox.Max.Z]
                 }
             }
             
-            # 실린더, 콘, 평면 정보 추출
-            geom = face.Geometry
-            if shape in ["Cylinder", "Conical"]:
+            # 실린더, 콘, 평면 정보 추출 (이름 매칭 유연화)
+            if "Cylinder" in face_type or "Conical" in face_type:
                 face_data["radius"] = geom.Radius
                 face_data["origin"] = [geom.Frame.Origin.X, geom.Frame.Origin.Y, geom.Frame.Origin.Z]
                 face_data["axis"] = [geom.Frame.Axis.Z.X, geom.Frame.Axis.Z.Y, geom.Frame.Axis.Z.Z]
                 face_data["is_internal"] = face.IsInternal
-            elif shape == "Plane":
+            elif "Plane" in face_type:
                 face_data["origin"] = [geom.Frame.Origin.X, geom.Frame.Origin.Y, geom.Frame.Origin.Z]
                 face_data["normal"] = [geom.Frame.Axis.Z.X, geom.Frame.Axis.Z.Y, geom.Frame.Axis.Z.Z]
                 
@@ -52,11 +62,9 @@ def export_geometry_data():
         
         data["bodies"].append(body_info)
         
-    # 3. 파일 쓰기
     with open(output_path, 'w') as f:
         json.dump(data, f, indent=4)
     
     print("Export finished! File saved as: " + os.path.abspath(output_path))
 
-# 실행
 export_geometry_data()
