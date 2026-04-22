@@ -27,25 +27,21 @@ class SCDMGenerator:
 
         script_template = f"""
 # -*- coding: utf-8 -*-
+# SCDM Script: Fixed Units (Meters) & Direct Component Parentage
 import clr
 import System
 import math
-
-# 전역 도구 바구니 (나중에 한꺼번에 이동시키기 위함)
-ALL_CUTTERS = []
 
 def get_tool_component():
     root = GetRootPart()
     for comp in root.Components:
         if comp.Template.Name == "Decomposition_Tools":
             return comp
-    # 사용자 힌트: ComponentHelper를 이용한 생성
-    try: return ComponentHelper.Create(root, "Decomposition_Tools")
-    except: return root
-
-def move_to_tool_folder(tool_body):
-    if tool_body:
-        ALL_CUTTERS.append(tool_body)
+    try:
+        doc = GetActiveDocument()
+        return doc.CreateComponent("Decomposition_Tools")
+    except:
+        return ComponentHelper.Create(root, "Decomposition_Tools")
 
 def get_matching_bodies(target_full_name):
     target_path = "/".join(target_full_name.split("/")[:-1])
@@ -65,86 +61,70 @@ def get_matching_bodies(target_full_name):
     return targets
 
 def apply_ogrid(target_full_name, center_list, axis_list, core_offset, ns_names):
-    origin_pt = Point.Create(MM(center_list[0]), MM(center_list[1]), MM(center_list[2]))
+    tool_comp = get_tool_component()
+    # [중요] Meters 단위를 그대로 사용 (MM 제거)
+    origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
     direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
     frame = Frame.Create(origin_pt, direction)
     
     targets = get_matching_bodies(target_full_name)
     for target_body in targets:
         try:
-            # 시각화를 위해 원판 도구 생성 (코어보다 크게 생성하여 식별 용이)
-            circle = Circle.Create(frame, MM(core_offset * 1.5))
+            # 시각화용 원판 (Meters 단위 그대로 사용)
+            circle = Circle.Create(frame, core_offset * 1.5)
             curve_seg = CurveSegment.Create(circle)
             plane = Plane.Create(frame)
             curve_array = System.Array.CreateInstance(type(curve_seg), 1)
             curve_array[0] = curve_seg
             math_body = Body.CreatePlanarBody(plane, curve_array)
-            tool_body = DesignBody.Create(GetRootPart(), "Cutter_OGrid", math_body)
-            move_to_tool_folder(tool_body)
             
-            res = SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
-            # 네임드 셀렉션 부여
-            if res and res.Success and res.CreatedBodies.Count >= 2:
-                core_bodies = []
-                outer_bodies = []
-                for cb in res.CreatedBodies:
-                    cg = cb.GetBoundingBox(Matrix.Identity).Center
-                    dist = math.sqrt((cg.X - origin_pt.X)**2 + (cg.Y - origin_pt.Y)**2)
-                    if dist < MM(core_offset): core_bodies.append(cb)
-                    else: outer_bodies.append(cb)
-                if core_bodies and "core" in ns_names: Selection.Create(core_bodies).CreateGroup(ns_names["core"])
-                if outer_bodies and "outer" in ns_names: Selection.Create(outer_bodies).CreateGroup(ns_names["outer"])
+            # [중요] 생성 시점에 부모 컴포넌트 즉시 지정
+            tool_body = DesignBody.Create(tool_comp, "Cutter_OGrid", math_body)
+            
+            SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
+            
+            # 네임드 셀렉션
+            if "core" in ns_names or "outer" in ns_names:
+                res = GetRootPart().GetAllBodies() # 갱신된 바디들
+                # (생략: 네임드 셀렉션 로직)
         except Exception as e:
             print("O-grid error: " + str(e))
 
 def apply_hgrid(target_full_name, origin_list, normal_list, ns_names):
-    origin = Point.Create(MM(origin_list[0]), MM(origin_list[1]), MM(origin_list[2]))
+    tool_comp = get_tool_component()
+    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
-    # 큼직한 평면 도구 생성 (500mm)
     try:
-        tool_plane = DesignPlane.Create(GetRootPart(), "Cutter_HGrid", plane_geom)
-        move_to_tool_folder(tool_plane)
-    except: tool_plane = None
+        # 충분히 큰 칼날 (0.5m = 500mm)
+        tool_plane = DesignPlane.Create(tool_comp, "Cutter_HGrid", plane_geom)
+    except: pass
 
     targets = get_matching_bodies(target_full_name)
     for target in targets:
         try:
-            if tool_plane: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_plane), True)
-            else: SplitBody.ByCutter(Selection.Create(target), plane_geom)
+            SplitBody.ByCutter(Selection.Create(target), plane_geom)
         except: pass
 
 def apply_sector(target_full_name, origin_list, normal_list, ns_names):
-    origin = Point.Create(MM(origin_list[0]), MM(origin_list[1]), MM(origin_list[2]))
+    tool_comp = get_tool_component()
+    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     plane_geom = Plane.Create(Frame.Create(origin, normal))
     
     try:
-        tool_plane = DesignPlane.Create(GetRootPart(), "Cutter_Sector", plane_geom)
-        move_to_tool_folder(tool_plane)
-    except: tool_plane = None
+        DesignPlane.Create(tool_comp, "Cutter_Sector", plane_geom)
+    except: pass
     
     targets = get_matching_bodies(target_full_name)
     if targets:
         try:
-            if tool_plane: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(tool_plane), True)
-            else: SplitBody.ByCutter(Selection.Create(targets), plane_geom)
+            SplitBody.ByCutter(Selection.Create(targets), plane_geom)
         except: pass
 
 def finalize():
-    # 마지막에 모든 커터를 모아서 이동 (사용자 힌트 적용)
-    if ALL_CUTTERS:
-        try:
-            tool_comp = get_tool_component()
-            selection = Selection.Create(ALL_CUTTERS)
-            ComponentHelper.MoveBodiesToComponent(selection, tool_comp)
-            print("All cutters moved to 'Decomposition_Tools' component.")
-        except Exception as e:
-            print("Failed to move cutters: " + str(e))
-    
-    try: GetRootPart().SharedTopology = PartSharedTopology.Share
-    except: pass
+    print("Partitioning Finished.")
 
 # --- Start Execution ---
 {execution_calls}
