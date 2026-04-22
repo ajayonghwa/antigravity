@@ -165,7 +165,21 @@ def apply_sector(body_name, origin_list, normal_list, ns_names):
     
     bodies = GetRootPart().GetAllBodies()
     for b in bodies:
-        if b.Name.startswith(body_name):
+        b_name = b.Name
+        try:
+            fn = getattr(b, 'GetFullName', None)
+            if fn: b_name = fn().split("/")[-1]
+        except: pass
+
+        is_match = False
+        if b_name == body_name:
+            is_match = True
+        elif b_name.startswith(body_name + " ("):
+            is_match = True
+        elif b_name.startswith(body_name + " "):
+            is_match = True
+            
+        if is_match:
             try:
                 SplitBody.ByCutter(Selection.Create(b), plane)
             except: pass
