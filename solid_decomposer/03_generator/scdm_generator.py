@@ -28,15 +28,13 @@ import math
 
 # [강화] 스페이스클레임 API 네임스페이스 명시적 임포트
 try:
-    import SpaceClaim.Api.V19 as Api
+    import SpaceClaim.Api.V19.Commands as Commands
     from SpaceClaim.Api.V19 import *
     from SpaceClaim.Api.V19.Modeler import *
-    from SpaceClaim.Api.V19.Commands import *
 except:
     try:
-        import SpaceClaim.Api.V18 as Api
+        import SpaceClaim.Api.V18.Commands as Commands
         from SpaceClaim.Api.V18 import *
-        from SpaceClaim.Api.V18.Commands import *
     except: pass
 
 ALL_CUTTERS = []
@@ -81,7 +79,8 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
             
             tool_body = None
             try:
-                sel = Selection.Create(design_curve.Edge)
+                # [수정] .Edge 대신 객체 자체를 Selection으로 생성 (가장 범용적)
+                sel = Selection.Create(design_curve)
                 # [강화] Commands 명시적 호출 및 인자 개수 대응
                 try:
                     # 4개 인자 방식 시도
@@ -96,7 +95,7 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
                 print("Extrude error: " + str(e))
                 # [최종 보루] Pull 도구 시도
                 try:
-                    result = Commands.Pull.Execute(Selection.Create(design_curve.Edge), direction, extrude_dist, PullOptions(), None)
+                    result = Commands.Pull.Execute(Selection.Create(design_curve), direction, extrude_dist, PullOptions(), None)
                     if result.CreatedBodies.Count > 0: tool_body = result.CreatedBodies[0]
                 except: pass
             
@@ -108,14 +107,6 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
                     Commands.SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
                 except: pass
             
-            design_curve.Delete()
-                
-                # 3. 분할 실행
-                try:
-                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True)
-                except: pass
-            
-            # 임시 커브 삭제
             design_curve.Delete()
         except Exception as e:
             print("O-grid error: " + str(e))
