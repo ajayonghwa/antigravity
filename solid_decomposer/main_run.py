@@ -71,7 +71,8 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
             guide_text = f"# Decomposition Strategy Report: {sub_device_name}\n"
             guide_text += f"- **Model Units**: {current_units}\n\n"
             for body in bodies_list:
-                strategy, plans = planner.analyze_body(body)
+                # [v4.57] 리포트 생성 시에도 단위를 명시적으로 전달하여 미터/mm 혼동 방지
+                strategy, plans = planner.analyze_body(body, units=current_units)
                 guide_text += GuideGenerator.generate_markdown(body.get('body_name','Unknown'), strategy, plans)
                 guide_text += "\n\n"
             guide_path = os.path.join(project_root, "04_scripts", "Decomposition_Guide.md")
