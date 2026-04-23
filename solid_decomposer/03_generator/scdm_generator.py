@@ -48,8 +48,9 @@ def initialize_api():
 
 initialize_api()
 
-if 'ALL_CUTTERS' not in globals():
-    ALL_CUTTERS = []
+# 전역 커터 관리
+if 'ALL_CUTTERS' not in globals(): ALL_CUTTERS = []
+CUTTER_COMP = None
 
 def get_all_bodies_recursive(part, body_list):
     for body in part.Bodies: body_list.append(body)
@@ -59,25 +60,42 @@ def get_all_bodies_recursive(part, body_list):
 def get_matching_bodies(target_name):
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
-    return [b for b in all_bodies if b.Name == target_name]
+    # 이름이 정확히 일치하거나, 분할되어 접미사가 붙은 바디들 수집
+    return [b for b in all_bodies if b.Name == target_name or b.Name.startswith(target_name + "_")]
 
 def _get_safe_range(obj):
-    '''바디 또는 파트의 크기 정보를 안전하게 가져옴'''
     for attr in ['Range', 'Box', 'BoundingBox', 'Extent']:
-        if hasattr(obj, attr):
-            return getattr(obj, attr)
+        if hasattr(obj, attr): return getattr(obj, attr)
     return None
+
+def _get_cutter_comp():
+    '''커터들을 모아둘 전용 컴포넌트 생성/반환'''
+    global CUTTER_COMP
+    if CUTTER_COMP: return CUTTER_COMP
+    root = GetRootPart()
+    # 기존에 있으면 사용, 없으면 생성
+    for comp in root.Components:
+        if comp.Name == "AUTO_CUTTERS":
+            CUTTER_COMP = comp
+            return CUTTER_COMP
+    CUTTER_COMP = Component.Create(root, "AUTO_CUTTERS")
+    return CUTTER_COMP
+
+def _move_to_cutter_comp(body):
+    '''바디를 커터 컴포넌트로 이동'''
+    try:
+        comp = _get_cutter_comp()
+        body.SetParent(comp)
+    except: pass
 
 def _create_cylindrical_cutter(target_body, origin_pt, direction, radius):
     try:
         root = GetRootPart()
-        # 대상 바디 크기 기준으로 커터 길이 결정
         bbox = _get_safe_range(target_body)
+        extrude_dist = 1.0
         if bbox:
             diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
-            extrude_dist = max(diag * 2.0, 0.1)
-        else:
-            extrude_dist = 1.0
+            extrude_dist = diag * 2.5 # 더 넉넉하게
         
         shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
                                       origin_pt.Y - direction.Y * extrude_dist/2, 
@@ -98,12 +116,17 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius):
         get_all_bodies_recursive(root, bodies_after)
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         design_curve.Delete()
-        return new_bodies[0] if new_bodies else None
+        
+        if new_bodies:
+            tool = new_bodies[0]
+            _move_to_cutter_comp(tool)
+            return tool
+        return None
     except: return None
 
 def apply_ogrid(target_name, center, axis, offset, idx):
     global ALL_CUTTERS
-    print(" -> Step {{0}}: O-GRID splitting for {{1}}".format(idx, target_name))
+    print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name))
     targets = get_matching_bodies(target_name)
     if not targets: return
 
@@ -113,13 +136,18 @@ def apply_ogrid(target_name, center, axis, offset, idx):
     for i, target in enumerate(targets):
         tool = _create_cylindrical_cutter(target, origin_pt, direction, offset)
         if tool:
+            tool.Name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
             ALL_CUTTERS.append(tool)
-            try: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
-            except: pass
+            try:
+                # 겹침 방지를 위해 약간의 안정 시간(옵션) 혹은 즉시 분할
+                res = SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+                print("    [OK] Split Success")
+            except Exception as e:
+                print("    [SKIP] Unable to split: " + str(e))
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
-    print(" -> Step {{0}}: {{1}} splitting for {{2}}".format(idx, strategy, target_name))
+    print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name))
     targets = get_matching_bodies(target_name)
     if not targets: return
     
@@ -128,12 +156,12 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     frame = Frame.Create(origin, normal)
     root = GetRootPart()
 
-    for target in targets:
+    for i, target in enumerate(targets):
         try:
             bbox = _get_safe_range(target)
-            huge_radius = 1.0
+            huge_radius = 2.0
             if bbox:
-                huge_radius = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2) * 1.5
+                huge_radius = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2) * 2.0
             
             circle_geom = Circle.Create(frame, huge_radius)
             design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
@@ -148,23 +176,23 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
             
             if new_bodies:
                 tool = new_bodies[0]
+                tool.Name = "Cutter_Plane_" + strategy + "_" + str(idx) + "_" + str(i)
+                _move_to_cutter_comp(tool)
                 ALL_CUTTERS.append(tool)
-                try: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
-                except: pass
+                try: 
+                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+                    print("    [OK] Split Success")
+                except: print("    [SKIP] Unable to split")
             design_curve.Delete()
         except: pass
 
 def finalize():
-    global ALL_CUTTERS
-    print(" -> Finalizing...")
-    for cutter in ALL_CUTTERS:
-        try: cutter.Delete()
-        except: pass
+    print(" -> Workflow Finished. 'AUTO_CUTTERS' component contains all used tools.")
+    print(" -> If any split skipped, please manually use the cutters and delete them.")
     try:
         from SpaceClaim.Api.V22.Commands import PartSharedTopology
         PartSharedTopology.Share(GetRootPart(), None)
     except: pass
-    print(" --- Finished ---")
 
 # --- EXECUTION ---
 {execution_calls}
