@@ -195,19 +195,23 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         if not root: root = Application.GetActiveDocument().MainPart
         
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        print("   [DEBUG 2] Plane creation")
+        print("   [DEBUG 2] Planar Cutter creation start")
         
-        frame = Frame.Create(origin, normal)
-        circle = Circle.Create(frame, 20.0) # 20m
-        dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-        
+        # [v4.95] 평면형 커터 생성 (Fill 방식 선호, PlanarBody 폴백)
         try:
-            # [v4.94] Fill도 사용자가 알려준 방식에 맞춰 안정적으로 호출
+            frame = Frame.Create(origin, normal)
+            circle = Circle.Create(frame, 20.0) # 20m radius for plane
+            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             options = FillOptions()
             Fill.Execute(Selection.Create(dc.Edges[0]), options, None)
             print("   [DEBUG 3] Fill success")
-        except Exception as pe:
-            print("   [DEBUG 3-FAIL] Fill error: " + str(pe))
+            dc.Delete()
+        except Exception as fe:
+            print("   [DEBUG 3-FAIL] Fill error, trying Direct Planar Body: " + str(fe))
+            # 폴백: 직접 평면 바디 생성
+            plane = Plane.Create(frame)
+            new_solid = Body.CreatePlanarBody(plane, Interval.Create(-10.0, 10.0), Interval.Create(-10.0, 10.0))
+            DesignBody.Create(root, "Cutter_Plane", new_solid)
             
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b_list = [b for b in bodies_after if b not in bodies_before]
@@ -218,7 +222,6 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
-        dc.Delete()
         print("   [OK] {0} complete for {1}".format(strategy, targets[0].Name))
     except Exception as e:
         print("   [ERROR] apply_split_plane crashed: " + str(e))
