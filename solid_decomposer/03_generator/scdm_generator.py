@@ -68,13 +68,16 @@ def _get_target_cutter_part_master(target_body_name):
         return new_part
     except: return root
 
-def _safe_split(target_body, cutter_face):
+def _safe_split_multi(targets, cutter_face):
+    # [v4.26] 여러 타겟 바디를 한꺼번에 잘라 4분할 시 누락되는 조각이 없게 합니다.
+    if not targets: return False
     try:
-        res = SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(cutter_face), True, None)
+        sel = Selection.Create(targets)
+        res = SplitBody.ByCutter(sel, Selection.Create(cutter_face), True, None)
         if res.CreatedBodies.Count > 0: return True
     except: pass
     try:
-        SplitBody.Execute(Selection.Create(target_body), Selection.Create(cutter_face))
+        SplitBody.Execute(Selection.Create(targets), Selection.Create(cutter_face))
         return True
     except: pass
     return False
@@ -89,44 +92,48 @@ def apply_ogrid(body_b64, center, axis, offset, idx):
     direction = Direction.Create(axis[0], axis[1], axis[2])
     root = GetRootPart()
 
-    for i, target in enumerate(targets):
-        try:
-            bodies_before = list(root.GetDescendants[IDesignBody]())
-            diag = 2.0
-            r = getattr(target.Shape, "Range", getattr(target, "Box", getattr(target, "BoundingBox", None)))
-            if r: diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
-            extrude_dist = max(diag * 4.0, 0.1)
+    try:
+        bodies_before = list(root.GetDescendants[IDesignBody]())
+        
+        # 커터 생성 (첫 번째 타겟 크기 기준)
+        diag = 2.0
+        r = getattr(targets[0].Shape, "Range", getattr(targets[0], "Box", getattr(targets[0], "BoundingBox", None)))
+        if r: diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
+        extrude_dist = max(diag * 10.0, 0.5)
+        
+        shifted_origin = Point.Create(origin_pt.X - axis[0] * extrude_dist/2, 
+                                      origin_pt.Y - axis[1] * extrude_dist/2, 
+                                      origin_pt.Z - axis[2] * extrude_dist/2)
+        frame = Frame.Create(shifted_origin, direction)
+        circle = Circle.Create(frame, offset)
+        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
+        
+        try: ExtrudeEdges.Execute(Selection.Create(design_curve), extrude_dist, ExtrudeEdgeOptions(), None)
+        except: 
+            try: ExtrudeEdges.Execute(Selection.Create(design_curve), Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+            except: pass
+        
+        bodies_after = list(root.GetDescendants[IDesignBody]())
+        new_bodies = [b for b in bodies_after if b not in bodies_before]
+        if new_bodies:
+            tool = new_bodies[0]
+            tool.Name = "Cutter_OGrid_{{0}}".format(idx)
+            cutter_face = tool.Faces[0]
+            for f in tool.Faces:
+                if "Cylinder" in f.Shape.Geometry.GetType().Name:
+                    cutter_face = f
+                    break
             
-            shifted_origin = Point.Create(origin_pt.X - axis[0] * extrude_dist/2, 
-                                          origin_pt.Y - axis[1] * extrude_dist/2, 
-                                          origin_pt.Z - axis[2] * extrude_dist/2)
-            frame = Frame.Create(shifted_origin, direction)
-            circle = Circle.Create(frame, offset)
-            design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-            sel = Selection.Create(design_curve)
-            try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
-            except: 
-                try: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
-                except: pass
+            # 일괄 분할
+            if _safe_split_multi(targets, cutter_face): print("    [OK] Multi-Split Success")
+            else: print("    [FAIL] Multi-Split failed")
             
-            bodies_after = list(root.GetDescendants[IDesignBody]())
-            new_bodies = [b for b in bodies_after if b not in bodies_before]
-            if new_bodies:
-                tool = new_bodies[0]
-                tool.Name = "Cutter_OGrid_{{0}}_{{1}}".format(idx, i)
-                cutter_face = tool.Faces[0]
-                for f in tool.Faces:
-                    if "Cylinder" in f.Shape.Geometry.GetType().Name:
-                        cutter_face = f
-                        break
-                if _safe_split(target, cutter_face): print("    [OK] Split Success")
-                else: print("    [FAIL] Split failed")
-                try: 
-                    target_master = _get_target_cutter_part_master(target.Name)
-                    tool.SetParent(target_master)
-                except: pass
-            design_curve.Delete()
-        except Exception as e: print("    [ERROR] " + str(e))
+            try: 
+                target_master = _get_target_cutter_part_master(targets[0].Name)
+                tool.SetParent(target_master)
+            except: pass
+        design_curve.Delete()
+    except Exception as e: print("    [ERROR] " + str(e))
 
 def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx):
     targets = get_matching_bodies(body_b64)
@@ -139,30 +146,30 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx):
     frame = Frame.Create(origin, normal)
     root = GetRootPart()
 
-    for i, target in enumerate(targets):
-        try:
-            bodies_before = list(root.GetDescendants[IDesignBody]())
-            huge_radius = 5.0
-            r = getattr(target.Shape, "Range", getattr(target, "Box", getattr(target, "BoundingBox", None)))
-            if r: huge_radius = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2) * 4.0
+    try:
+        bodies_before = list(root.GetDescendants[IDesignBody]())
+        huge_radius = 10.0 # 더 넉넉하게
+        
+        circle_geom = Circle.Create(frame, huge_radius)
+        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
+        Fill.Execute(Selection.Create(design_curve))
+        
+        bodies_after = list(root.GetDescendants[IDesignBody]())
+        new_bodies = [b for b in bodies_after if b not in bodies_before]
+        if new_bodies:
+            tool = new_bodies[0]
+            tool.Name = "Cutter_{{0}}_{{1}}".format(strategy, idx)
             
-            circle_geom = Circle.Create(frame, huge_radius)
-            design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-            Fill.Execute(Selection.Create(design_curve))
+            # 일괄 분할
+            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Multi-Split Success")
+            else: print("    [FAIL] Multi-Split failed")
             
-            bodies_after = list(root.GetDescendants[IDesignBody]())
-            new_bodies = [b for b in bodies_after if b not in bodies_before]
-            if new_bodies:
-                tool = new_bodies[0]
-                tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
-                if _safe_split(target, tool.Faces[0]): print("    [OK] Split Success")
-                else: print("    [FAIL] Split failed")
-                try: 
-                    target_master = _get_target_cutter_part_master(target.Name)
-                    tool.SetParent(target_master)
-                except: pass
-            design_curve.Delete()
-        except Exception as e: print("    [ERROR] " + str(e))
+            try: 
+                target_master = _get_target_cutter_part_master(targets[0].Name)
+                tool.SetParent(target_master)
+            except: pass
+        design_curve.Delete()
+    except Exception as e: print("    [ERROR] " + str(e))
 
 def finalize():
     print(" --- Finished ---")
