@@ -98,12 +98,18 @@ def get_matching_bodies(body_b64):
     
     matched = []
     for b in all_bodies:
-        b_name_clean = b.Name.lower().replace(" ", "")
-        t_name_clean = target_name.replace(" ", "")
+        # [v4.88] 뿌리 이름 추적: 원본 이름이 포함된 모든 파편(Fragment)을 대상으로 함
+        # 예: 'Body_1' -> 'Body_1', 'Body_1_1', 'Body_1 (Copy)' 등을 모두 포함
+        b_name_clean = b.Name.lower().replace(" ", "").replace("(", "").replace(")", "").replace("_", "")
+        t_name_clean = target_name.replace(" ", "").replace("(", "").replace(")", "").replace("_", "")
+        
         if t_name_clean in b_name_clean: matched.append(b)
     
     if not matched:
-        print("   [WARN] No body found matching: {0}".format(target_name))
+        print("   [WARN] No body or fragments found matching: {0}".format(target_name))
+    else:
+        if len(matched) > 1:
+            print("   [INFO] Found {0} fragments for target {1}".format(len(matched), target_name))
     return matched
 
 def create_body_component(name_b64, body_idx):
