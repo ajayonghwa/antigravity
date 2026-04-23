@@ -3,7 +3,7 @@ import json
 import os
 import clr
 
-# [v4.59] DesignBody.Name 읽기 전용 오류 해결 (Rename 시도 제거)
+# [v4.60] 재귀 탐색을 통한 전 계층 바디 추출 (Assembly 대응)
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -19,31 +19,23 @@ if 'OUTPUT_PATH' not in globals():
 def get_face_data(face, matrix):
     f_id = face.GetHashCode()
     data = {"id": f_id, "type": "Unknown", "area": face.Area * 1e6, "box": {"min": [0,0,0], "max": [0,0,0]}, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
-    
     try:
         shape = face.Shape
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
-        
         bbox = face.GetBoundingBox(Matrix.Identity)
         data["origin"] = [round(bbox.Center.X * 1000.0, 6), round(bbox.Center.Y * 1000.0, 6), round(bbox.Center.Z * 1000.0, 6)]
         data["box"]["min"] = [round(bbox.Min.X * 1000.0, 6), round(bbox.Min.Y * 1000.0, 6), round(bbox.Min.Z * 1000.0, 6)]
         data["box"]["max"] = [round(bbox.Max.X * 1000.0, 6), round(bbox.Max.Y * 1000.0, 6), round(bbox.Max.Z * 1000.0, 6)]
-
         r = 0.0
         if hasattr(geom, "Radius"): r = geom.Radius
         elif hasattr(geom, "Radius0"): r = geom.Radius0
-        
         if r <= 0:
             for edge in face.Edges:
-                e_geom = edge.Shape.Geometry
-                if hasattr(e_geom, "Radius"):
-                    r = e_geom.Radius; break
-        
+                if hasattr(edge.Shape.Geometry, "Radius"): r = edge.Shape.Geometry.Radius; break
         if r > 0:
             data["radius"] = round(r * 1000.0, 6)
             if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-            
         if hasattr(geom, "Frame"):
             f = geom.Frame
             data["axis"] = [
@@ -54,46 +46,51 @@ def get_face_data(face, matrix):
     except: pass
     return data
 
+def find_all_bodies(part, matrix, all_bodies):
+    # 1. 현재 파트의 바디 추출
+    for body in part.Bodies:
+        all_bodies.append((body, matrix))
+    
+    # 2. 하위 컴포넌트 재귀 탐색
+    for comp in part.Components:
+        trans = comp.TransformToRoot
+        new_matrix = [[trans.Matrix.M11, trans.Matrix.M12, trans.Matrix.M13, trans.Translation.X*1000.0],
+                      [trans.Matrix.M21, trans.Matrix.M22, trans.Matrix.M23, trans.Translation.Y*1000.0],
+                      [trans.Matrix.M31, trans.Matrix.M32, trans.Matrix.M33, trans.Translation.Z*1000.0]]
+        find_all_bodies(comp.Template, new_matrix, all_bodies)
+
 def extract_geometry():
-    print("--- SCDM Deep Extraction (v4.59) ---")
-    all_bodies_data = []
-    try: root = GetRootPart()
-    except: return [], [], "mm"
+    print("--- SCDM Deep Discovery Extraction (v4.60) ---")
+    all_bodies_raw = []
+    try: 
+        root = GetRootPart()
+        identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+        find_all_bodies(root, identity, all_bodies_raw)
+    except Exception as re:
+        print(" - [ERROR] Discovery Failed: " + str(re))
+        return [], [], "mm"
     
-    bodies = list(root.GetDescendants[IDesignBody]())
-    if not bodies: bodies = list(root.Bodies)
-    
-    for i, body in enumerate(bodies):
-        # [v4.59] 바디 이름 수정 시도 제거 (ReadOnly 에러 방지)
-        b_name = "Unnamed_Body"
+    print(" - Found {0} bodies in hierarchy".format(len(all_bodies_raw)))
+    final_data = []
+    for i, (body, matrix) in enumerate(all_bodies_raw):
+        b_name = "Unknown"
         try: b_name = body.Name
         except: pass
-        
-        matrix_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
-        try:
-            comp = body.ParentComponent
-            if comp:
-                t = comp.TransformToRoot
-                matrix_py[0][3] = t.Translation.X * 1000.0
-                matrix_py[1][3] = t.Translation.Y * 1000.0
-                matrix_py[2][3] = t.Translation.Z * 1000.0
-        except: pass
-        
         vol = 0.0
         try: vol = body.Shape.Volume * 1e9
         except: pass
         
         bdata = {"body_index": i, "body_name": b_name, "volume": vol, "faces": []}
         for face in list(body.Faces):
-            bdata["faces"].append(get_face_data(face, matrix_py))
-        all_bodies_data.append(bdata)
-        print(" - Body '{0}' extracted successfully.".format(b_name))
+            bdata["faces"].append(get_face_data(face, matrix))
+        final_data.append(bdata)
+        print("   [OK] Body {0}: '{1}' extracted.".format(i, b_name))
             
-    return all_bodies_data, [], "mm"
+    return final_data, [], "mm"
 
 try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete. Read-only bypass applied.")
+    print("\n[FINISH] Extraction complete with hierarchy search.")
 except Exception as e: print("\n[FATAL] " + str(e))
