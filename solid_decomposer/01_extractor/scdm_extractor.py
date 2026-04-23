@@ -5,7 +5,7 @@ import os
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
-def get_face_data(face, matrix):
+def get_face_data(face):
     data = {
         "id": 0, "type": "Unknown", "area": 0.0, 
         "box": {"min": [0,0,0], "max": [0,0,0]},
@@ -23,39 +23,16 @@ def get_face_data(face, matrix):
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
                 f = geom.Frame
+                data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
+                data["axis"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
                 
-                # [v4.23] Matrix 곱셈 연산자(*) 대신 명시적 Transform 메서드 사용
-                if matrix is not None:
-                    try:
-                        # SpaceClaim Matrix 객체의 Transform 메서드 시도
-                        w_origin = matrix.Transform(f.Origin)
-                        w_axis = matrix.Transform(f.DirZ)
-                        data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
-                        data["axis"] = [w_axis.X, w_axis.Y, w_axis.Z]
-                    except:
-                        # 실패시 연산자 시도
-                        try:
-                            w_origin = matrix * f.Origin
-                            data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
-                        except:
-                            data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
-                else:
-                    data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
-                    data["axis"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
+                if hasattr(shape, "Orientation"):
+                    if str(shape.Orientation) == "Reversed": data["is_internal"] = True
             
             elif "Plane" in g_type:
                 f = geom.Frame
-                if matrix is not None:
-                    try:
-                        w_origin = matrix.Transform(f.Origin)
-                        w_normal = matrix.Transform(f.DirZ)
-                        data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
-                        data["normal"] = [w_normal.X, w_normal.Y, w_normal.Z]
-                    except:
-                        data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
-                else:
-                    data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
-                    data["normal"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
+                data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
+                data["normal"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
 
         # Bounding Box
         r = getattr(shape, "Range", getattr(face, "Box", getattr(face, "BoundingBox", None)))
@@ -66,41 +43,36 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Matrix Transform Extraction (v4.23) ---")
+    print("--- SCDM Modeler Extraction (v4.24) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
     
-    unit_str = "m"
-    try: unit_str = str(root.Document.Units.Length.Symbol)
+    # [v4.24] Modeler 네임스페이스를 명시적으로 로드하여 GetAllBodies() 확장 메서드 활성화 시도
+    import clr
+    try:
+        clr.AddReference("SpaceClaim.Api.V22")
+        from SpaceClaim.Api.V22.Modeler import Body as ModelerBody
     except: pass
 
-    bodies_info = []
-    def get_all_occurrences(part, current_matrix):
-        # 최상위 바디들
-        for b in part.Bodies:
-            bodies_info.append((b, current_matrix))
-        # 컴포넌트 하위 바디들
-        for c in part.Components:
-            try:
-                # c.Placement (Matrix)
-                m = c.Placement
-                if current_matrix is None:
-                    next_matrix = m
-                else:
-                    # Matrix 곱셈 (연산자 혹은 Multiply)
-                    try: next_matrix = current_matrix * m
-                    except: next_matrix = m
-            except:
-                next_matrix = current_matrix
-                
-            if hasattr(c, "Template") and c.Template:
-                get_all_occurrences(c.Template, next_matrix)
+    bodies = []
+    try:
+        # [최종 수단] GetAllBodies()가 존재하는지 확인
+        bodies = list(root.GetAllBodies())
+        print(" - Successfully used GetAllBodies()")
+    except:
+        # 실패시 수동 계층 탐색 (World Coordinate 인스턴스 추출)
+        print(" - GetAllBodies failed, falling back to GetDescendants")
+        try:
+            # V22에서는 GetDescendants[IDesignBody]()가 인스턴스를 반환할 수도 있음
+            from SpaceClaim.Api.V22 import IDesignBody
+            bodies = list(root.GetDescendants[IDesignBody]())
+        except:
+            bodies = list(root.Bodies)
 
-    get_all_occurrences(root, None)
-    print(" - Found {0} bodies".format(len(bodies_info)))
+    print(" - Found {0} bodies".format(len(bodies)))
 
-    for i, (body, matrix) in enumerate(bodies_info):
+    for i, body in enumerate(bodies):
         try:
             bname = body.Name
             body_data = {
@@ -109,7 +81,7 @@ def extract_geometry():
                 "faces": []
             }
             for j, face in enumerate(list(body.Faces)):
-                fdata = get_face_data(face, matrix)
+                fdata = get_face_data(face)
                 fdata["index"] = j
                 body_data["faces"].append(fdata)
             all_bodies_data.append(body_data)
@@ -117,11 +89,14 @@ def extract_geometry():
         except Exception as e:
             print(" - [ERROR] Failed on {0}: {1}".format(body.Name, str(e)))
             
+    unit_str = "m"
+    try: unit_str = str(root.Document.Units.Length.Symbol)
+    except: pass
     return all_bodies_data, [], unit_str
 
 try:
     results, warns, uinfo = extract_geometry()
-    final = {"sub_device_name": "DEVICE", "units": uinfo, "warnings": warns, "bodies": results}
+    final = {"sub_device_name": "DEVICE", "units": uinfo, "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
     print("\n[FINISH] Geometry data saved.")
 except Exception as e: print("\n[FATAL] Outer error: " + str(e))
