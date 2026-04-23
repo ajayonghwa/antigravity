@@ -218,6 +218,10 @@ class StrategyPlanner:
             # 3. 간섭을 고려한 O-Grid 계획
             plans.extend(self._plan_ogrid_for_hole(h1, main_axis, neighbor_gap=min_gap))
             
+        # [v4.1 추가] 원판 전체에 대한 4분할(Sector) 추가 - 격자 뼈대 형성
+        if len(holes) > 0:
+            plans.extend(self._generate_cross_sectors(self.body_center, main_axis))
+            
         return plans
 
     def _plan_cross_hole(self):
