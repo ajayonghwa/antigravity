@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.76] 로직 단순화 및 전방위 디버그 로깅 (Back to Basics)
+# [v4.77] face.Shape.GetBoundingBox를 통한 속성 접근 오류 해결
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -26,18 +26,18 @@ def get_face_data(face, matrix_obj):
         "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False
     }
     try:
-        geom = face.Shape.Geometry
+        shape = face.Shape
+        geom = shape.Geometry
         data["type"] = geom.GetType().Name
         
-        # 바운딩 박스 및 중심점
-        bbox = face.GetBoundingBox(matrix_obj)
+        # [v4.77] face 대신 shape 레벨에서 GetBoundingBox 호출 (속성 오류 해결)
+        bbox = shape.GetBoundingBox(matrix_obj)
         data["box"]["min"] = [round(bbox.Min.X * 1000.0, 6), round(bbox.Min.Y * 1000.0, 6), round(bbox.Min.Z * 1000.0, 6)]
         data["box"]["max"] = [round(bbox.Max.X * 1000.0, 6), round(bbox.Max.Y * 1000.0, 6), round(bbox.Max.Z * 1000.0, 6)]
         c = bbox.Center
         data["origin"] = [round(c.X * 1000.0, 8), round(c.Y * 1000.0, 8), round(c.Z * 1000.0, 8)]
         
         r_raw = 0.0
-        # [v4.76] 초심으로 돌아가는 반경 추출
         # 1. 면 직접 추출
         for attr in ["Radius", "Radius0", "MajorRadius"]:
             if hasattr(geom, attr):
@@ -51,15 +51,10 @@ def get_face_data(face, matrix_obj):
                 if hasattr(eg, "Radius"): r_raw = eg.Radius; break
                 if hasattr(eg, "Radius0"): r_raw = eg.Radius0; break
         
-        # [DEBUG] 모든 면에 대해 상태 보고
         if r_raw > 0:
             r_mm = r_raw * 1000.0 if r_raw < 0.1 else r_raw
             data["radius"] = round(r_mm, 8)
             print("   [DEBUG-FOUND] Face {0} ({1}) -> Raw={2:.6f}, R={3:.4f}mm".format(f_id, data["type"], r_raw, r_mm))
-        else:
-            # 반경을 못 찾은 면들도 타입을 출력하여 힌트 확보
-            # print("   [DEBUG-SKIP] Face {0} ({1})".format(f_id, data["type"]))
-            pass
 
         if hasattr(geom, "Frame"):
             f = geom.Frame
@@ -74,16 +69,14 @@ def get_face_data(face, matrix_obj):
     return data
 
 def extract_geometry():
-    print("--- SCDM Back-to-Basics Extraction (v4.76) ---")
+    print("--- SCDM Robust BBox Extraction (v4.77) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
         if not root: root = Application.GetActiveDocument().MainPart
         
-        # 바디 탐색 방식 이중화
         bodies_list = list(root.GetDescendants[IDesignBody]())
         if not bodies_list:
-            print(" - GetDescendants empty, trying manual traversal...")
             bodies_list = list(root.Bodies)
             for comp in root.Components:
                 for b in comp.Template.Bodies: bodies_list.append(b)
@@ -108,5 +101,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete (v4.76 Back-to-Basics).")
+    print("\n[FINISH] Extraction complete (v4.77 BBox fixed).")
 except Exception as e: print("\n[FATAL] " + str(e))
