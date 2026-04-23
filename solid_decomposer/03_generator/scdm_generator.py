@@ -161,7 +161,8 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         print("   [DEBUG 5] DesignCurve created")
         
         try: 
-            ExtrudeEdges.Execute(Selection.Create(dc), 10.0, ExtrudeEdgeOptions(), None)
+            # [v4.92] ExtrudeEdgeOptions() 대신 None 사용, dc.Edges[0] 선택
+            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), 10.0, None, None)
             print("   [DEBUG 6] Extrude success")
         except Exception as ee: 
             print("   [DEBUG 6-FAIL] Extrude error: " + str(ee))
@@ -170,6 +171,7 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
             print("   [DEBUG 7] New body found, starting split")
+            # [v4.92] SplitBody 옵션도 None으로 안전하게 처리
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b[0], b_idx)
@@ -201,7 +203,8 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
         try: 
-            Fill.Execute(Selection.Create(dc), None, FillOptions(), None)
+            # [v4.92] FillOptions() 대신 None 사용
+            Fill.Execute(Selection.Create(dc.Edges[0]), None, None, None)
             print("   [DEBUG 4] Fill success")
         except Exception as fe:
             print("   [DEBUG 4-FAIL] Fill error: " + str(fe))
