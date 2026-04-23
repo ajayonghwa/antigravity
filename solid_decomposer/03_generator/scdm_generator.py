@@ -157,17 +157,16 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         circle = Circle.Create(frame, offset)
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
         
-        # [v4.94] 사용자가 제안한 구문 적용: ExtrudeEdges.Execute
+        # [v4.96] 네임스페이스 에러 방지를 위해 옵션 객체 생성을 생략하고 None 전달
         try:
-            options = ExtrudeEdgeOptions()
             # MM() 함수를 사용하여 거리 지정 (10m = 10,000mm)
-            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), None, MM(10000), options, None)
+            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), None, MM(10000), None, None)
             print("   [DEBUG 3] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 3-FAIL] ExtrudeEdges error: " + str(ce))
             # 폴백: 직접 기하 생성 시도
             new_solid = Body.CreateCylinder(origin_pt, direction, offset, 10.0)
-            new_b = DesignBody.Create(root, "Cutter_Ogrid", new_solid)
+            DesignBody.Create(root, "Cutter_Ogrid", new_solid)
 
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b_list = [b for b in bodies_after if b not in bodies_before]
@@ -197,13 +196,12 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         print("   [DEBUG 2] Planar Cutter creation start")
         
-        # [v4.95] 평면형 커터 생성 (Fill 방식 선호, PlanarBody 폴백)
         try:
             frame = Frame.Create(origin, normal)
-            circle = Circle.Create(frame, 20.0) # 20m radius for plane
+            circle = Circle.Create(frame, 20.0) 
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-            options = FillOptions()
-            Fill.Execute(Selection.Create(dc.Edges[0]), options, None)
+            # [v4.96] FillOptions() 대신 None 사용
+            Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
             print("   [DEBUG 3] Fill success")
             dc.Delete()
         except Exception as fe:
