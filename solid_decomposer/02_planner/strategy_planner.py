@@ -192,18 +192,31 @@ class StrategyPlanner:
         return plans
 
     def _plan_perforated(self):
-        print(" - Perforated plate detected. Applying H-Grid matrix.")
+        print(" - Perforated plate detected. Analyzing interference for {0} holes.".format(len(self.all_curved)))
         plans = []
         groups = self._group_by_axis(self.all_curved)
+        if not groups: return []
         main_axis = groups[0]["axis"]
+        holes = groups[0]["holes"]
         
-        # H-Grid Matrix (구멍 사이사이를 직교 평면으로 분할)
-        # 단순화를 위해 각 구멍의 중심을 지나는 X, Y 평면 생성 (실제로는 중심 사이)
-        for hole in groups[0]["holes"]:
-            if "origin" not in hole: continue
-            o = np.array(hole["origin"])
-            # O-Grid 적용 (WHR 체크 포함)
-            plans.extend(self._plan_ogrid_for_hole(hole, main_axis))
+        # 1. 구멍 크기순 정렬 (큰 것 우선)
+        holes.sort(key=lambda h: h.get("radius", 0), reverse=True)
+        
+        # 2. 각 구멍별 최단 이웃 거리 계산
+        for i, h1 in enumerate(holes):
+            o1 = np.array(h1.get("origin", [0,0,0]))
+            r1 = h1.get("radius", 0)
+            min_gap = 1e9
+            
+            for j, h2 in enumerate(holes):
+                if i == j: continue
+                o2 = np.array(h2.get("origin", [0,0,0]))
+                dist = np.linalg.norm(o1 - o2)
+                gap = dist - (r1 + h2.get("radius", 0))
+                if gap < min_gap: min_gap = gap
+            
+            # 3. 간섭을 고려한 O-Grid 계획
+            plans.extend(self._plan_ogrid_for_hole(h1, main_axis, neighbor_gap=min_gap))
             
         return plans
 
@@ -324,34 +337,34 @@ class StrategyPlanner:
             "split_plane": {"origin": [float(x) for x in origin], "normal": [float(x) for x in normal]}
         }
 
-    def _plan_ogrid_for_hole(self, hole, axis):
+    def _plan_ogrid_for_hole(self, hole, axis, neighbor_gap=None):
         radius = hole.get("radius", 0)
-        if radius < 0.001: return []
+        if radius < 0.0005: return [] # 0.5mm 미만 제외
         
-        # 대형 구멍 (50mm 이상) 예외 처리
-        if radius >= 0.025: # 25mm radius = 50mm diameter
-            return [self._create_ogrid_dict(hole, axis, radius * 0.6)]
-            
-        # WHR 계산 (단순화된 거리 측정)
+        # [강화] 간섭 방지 오프셋 계산
+        # 기본은 반지름의 0.6배지만, 이웃과의 간격이 좁으면 그 절반 이하로 줄임
+        safe_offset = radius * 0.6
+        if neighbor_gap is not None:
+            # 이웃과의 틈새(gap)의 40% 정도만 사용하도록 제한 (충돌 방지 최후의 보루)
+            if neighbor_gap < safe_offset * 2:
+                safe_offset = max(neighbor_gap * 0.4, radius * 0.2)
+                print("    !! Tight gap detected ({0:.2f}mm). Adjusting offset to {1:.2f}mm".format(neighbor_gap*1000, safe_offset*1000))
+
+        # 바디 외곽까지의 최소 거리 (WHR 체크)
         origin = np.array(hole.get("origin", self.body_center))
-        min_dist = float('inf')
-        
-        # 바디 외곽까지의 최소 거리
+        min_wall_dist = float('inf')
         for i in range(3):
-            d1 = abs(origin[i] - (self.body_center[i] - self.body_size[i]/2))
-            d2 = abs(origin[i] - (self.body_center[i] + self.body_size[i]/2))
-            # 축 방향 거리는 제외 (직교 거리만 고려)
-            if abs(axis[i]) < 0.5:
-                min_dist = min(min_dist, d1, d2)
-                
-        whr = min_dist / radius if radius > 0 else 0
+            if abs(axis[i]) < 0.5: # 축 방향 제외
+                d1 = abs(origin[i] - (self.body_center[i] - self.body_size[i]/2))
+                d2 = abs(origin[i] - (self.body_center[i] + self.body_size[i]/2))
+                min_wall_dist = min(min_wall_dist, d1, d2)
         
-        if whr < 1.0:
-            return [] # 제외
-        elif whr > 6.0:
-            return [] # 제외
-        else:
-            return [self._create_ogrid_dict(hole, axis, radius * 0.6)]
+        # 벽면과의 간격이 너무 좁으면(오프셋보다 작으면) 실패 확률 높음 -> 건너뜀
+        if min_wall_dist < safe_offset * 1.1:
+            print("    !! Hole too close to boundary. Skipping O-Grid to prevent split failure.")
+            return []
+            
+        return [self._create_ogrid_dict(hole, axis, safe_offset)]
 
     def _create_ogrid_dict(self, hole, axis, offset):
         box = hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
