@@ -143,49 +143,84 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     try:
+        print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
         origin_pt = Point.Create(center[0], center[1], center[2])
         direction = Direction.Create(axis[0], axis[1], axis[2])
+        print("   [DEBUG 2] Point/Dir created")
+        
         root = GetRootPart()
+        if not root: root = Application.GetActiveDocument().MainPart
+        
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
+        print("   [DEBUG 3] Frame creation start (Offset={0})".format(offset))
+        frame = Frame.Create(origin_pt, direction)
+        circle = Circle.Create(frame, offset)
+        print("   [DEBUG 4] Circle created")
+        
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-        try: ExtrudeEdges.Execute(Selection.Create(dc), 10.0, ExtrudeEdgeOptions(), None)
-        except: pass
+        print("   [DEBUG 5] DesignCurve created")
+        
+        try: 
+            ExtrudeEdges.Execute(Selection.Create(dc), 10.0, ExtrudeEdgeOptions(), None)
+            print("   [DEBUG 6] Extrude success")
+        except Exception as ee: 
+            print("   [DEBUG 6-FAIL] Extrude error: " + str(ee))
+            
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
-            print("   [OK] O-Grid cutter created for {0}".format(targets[0].Name))
+            print("   [DEBUG 7] New body found, starting split")
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
-            except: print("   [WARN] Split failed for {0}".format(targets[0].Name))
+            except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
-    except Exception:
-        print("   [ERROR] apply_ogrid failed:")
-        traceback.print_exc()
+        print("   [OK] O-Grid complete for {0}".format(targets[0].Name))
+    except Exception as e:
+        print("   [ERROR] apply_ogrid crashed at step: " + str(e))
+        try:
+            import traceback
+            traceback.print_exc()
+        except: pass
 
 def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     try:
+        print("   [DEBUG 1] Start split_plane for {0}".format(targets[0].Name))
         origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
         normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        
         root = GetRootPart()
+        if not root: root = Application.GetActiveDocument().MainPart
+        
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle = Circle.Create(Frame.Create(origin, normal), 20.0)
+        print("   [DEBUG 2] Frame creation")
+        frame = Frame.Create(origin, normal)
+        circle = Circle.Create(frame, 20.0)
+        print("   [DEBUG 3] Circle created")
+        
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-        try: Fill.Execute(Selection.Create(dc), None, FillOptions(), None)
-        except: pass
+        try: 
+            Fill.Execute(Selection.Create(dc), None, FillOptions(), None)
+            print("   [DEBUG 4] Fill success")
+        except Exception as fe:
+            print("   [DEBUG 4-FAIL] Fill error: " + str(fe))
+            
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
-            print("   [OK] {0} cutter created for {1}".format(strategy, targets[0].Name))
+            print("   [DEBUG 5] New body found, starting split")
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
-            except: print("   [WARN] Split failed for {0}".format(targets[0].Name))
+            except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
-    except Exception:
-        print("   [ERROR] apply_split_plane failed:")
-        traceback.print_exc()
+        print("   [OK] {0} complete for {1}".format(strategy, targets[0].Name))
+    except Exception as e:
+        print("   [ERROR] apply_split_plane crashed: " + str(e))
+        try:
+            import traceback
+            traceback.print_exc()
+        except: pass
 
 REPLACE_COMP_CREATION
 REPLACE_EXECUTION
