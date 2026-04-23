@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.69] 객체 속성 조사(dir) 및 안정 버전 로직 복구
+# [v4.70] KeyError 'box' 해결을 위한 데이터 스키마 복구
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -20,48 +20,56 @@ if 'OUTPUT_PATH' not in globals():
 
 def get_face_data(face, matrix_obj):
     f_id = face.GetHashCode()
-    data = {"id": f_id, "type": "Unknown", "area": face.Area * 1e6, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
+    # [v4.70] box 필드 필수로 추가
+    data = {
+        "id": f_id, 
+        "type": "Unknown", 
+        "area": face.Area * 1e6, 
+        "box": {"min": [0,0,0], "max": [0,0,0]}, 
+        "origin": [0,0,0], 
+        "axis": [0,0,1], 
+        "radius": 0.0, 
+        "is_internal": False
+    }
     try:
         shape = face.Shape
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
         
-        # 전역 중심점 계산
+        # 1. 전역 좌표 중심점 및 바운딩 박스 (box 필드 채우기)
         bbox = face.GetBoundingBox(matrix_obj)
+        data["box"]["min"] = [round(bbox.Min.X * 1000.0, 6), round(bbox.Min.Y * 1000.0, 6), round(bbox.Min.Z * 1000.0, 6)]
+        data["box"]["max"] = [round(bbox.Max.X * 1000.0, 6), round(bbox.Max.Y * 1000.0, 6), round(bbox.Max.Z * 1000.0, 6)]
+        
         c = bbox.Center
         data["origin"] = [round(c.X * 1000.0, 8), round(c.Y * 1000.0, 8), round(c.Z * 1000.0, 8)]
         
         r = 0.0
         method = ""
         
-        # [v4.69 DEBUG] 기하 객체 속성 조사 (최초 1회성 로깅)
-        # attrs = dir(geom)
-        # if "Cylinder" in data["type"]: print("   [DEBUG] Cylinder Attrs: " + str(attrs[:10]))
-
-        # 1순위: 모서리(Edge) 기하 정보 (안정 버전에서 주로 쓰던 방식)
+        # 1순위: 모서리(Edge) 기반 (안정 버전 방식)
         for edge in face.Edges:
-            e_geom = edge.Shape.Geometry
-            # ICircle 또는 직접 속성 체크
-            for r_attr in ["Radius", "Radius0"]:
-                if hasattr(e_geom, r_attr):
-                    val = getattr(e_geom, r_attr)
-                    if val > 1e-8: r = val; method = "EDGE_GEOM"; break
-            if r > 0: break
-            
-        # 2순위: 면(Face) 기하 정보
+            eg = edge.Shape.Geometry
+            if hasattr(eg, "Radius"):
+                val = eg.Radius
+                if val > 1e-8: r = val; method = "EDGE_GEOM"; break
+            elif hasattr(eg, "Radius0"):
+                val = eg.Radius0
+                if val > 1e-8: r = val; method = "EDGE_GEOM"; break
+        
+        # 2순위: 면(Face) 기반
         if r <= 0:
             for r_attr in ["Radius", "Radius0", "MajorRadius"]:
                 if hasattr(geom, r_attr):
                     val = getattr(geom, r_attr)
                     if val > 1e-8: r = val; method = "FACE_GEOM"; break
 
-        # 3순위: 바운딩 박스 추론 (최후의 수단)
+        # 3순위: BBox 추론 (v4.69 기준 유지)
         if r <= 0:
             l_bbox = face.GetBoundingBox(Matrix.Identity)
             dx, dy, dz = l_bbox.Size.X, l_bbox.Size.Y, l_bbox.Size.Z
             dims = sorted([dx, dy, dz], reverse=True)
             if dims[1] > 1e-8:
-                # 어느 두 변이 대략적으로 비슷하면 (오차 30%까지 허용)
                 if abs(dims[0] - dims[1]) / (dims[0] + 1e-9) < 0.3:
                     r = (dims[0] + dims[1]) / 4.0
                     method = "BBOX_INFER"
@@ -72,7 +80,7 @@ def get_face_data(face, matrix_obj):
         if r > 0:
             data["radius"] = round(r * 1000.0, 8)
             if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-            print("   [FOUND] Face {0} ({1}) -> R={2:.4f}mm via {3}".format(f_id, data["type"], r*1000.0, method))
+            print("   [FOUND] Face {0} -> R={1:.4f}mm via {2}".format(f_id, r*1000.0, method))
             
         # 축 계산
         if hasattr(geom, "Frame"):
@@ -87,7 +95,7 @@ def get_face_data(face, matrix_obj):
     return data
 
 def extract_geometry():
-    print("--- SCDM Legacy Recovery Extraction (v4.69) ---")
+    print("--- SCDM Restoration Extraction (v4.70) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
@@ -110,7 +118,7 @@ def extract_geometry():
             for face in list(body.Faces):
                 bdata["faces"].append(get_face_data(face, t_mat))
             final_bodies_data.append(bdata)
-            print("   [OK] {0} complete.".format(b_name))
+            print("   [OK] {0} extraction complete.".format(b_name))
                 
     except Exception as e: print(" - [FATAL] Extraction error: " + str(e))
     return final_bodies_data, [], "mm"
@@ -119,5 +127,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete. Legacy paths recovered.")
+    print("\n[FINISH] Extraction complete. Schema 'box' restored.")
 except Exception as e: print("\n[FATAL] " + str(e))
