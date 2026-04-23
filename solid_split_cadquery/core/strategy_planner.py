@@ -74,7 +74,57 @@ class StrategyPlanner:
                 if abs(n.z) > 0.9:
                     z = face.Center().z
                     if bbox.zmin + eps < z < bbox.zmax - eps:
-                        candidates.append((cq.Vector(0, 0, z), cq.Vector(0, 0, 1), "STEP", 1.1))
+                        # 두께 사전 체크: 잘랐을 때 위/아래 조각의 최소 두께가
+                        # 전체 높이의 10% 이상이어야 후보로 등록
+                        thickness_below = z - bbox.zmin
+                        thickness_above = bbox.zmax - z
+                        min_thickness = min(thickness_below, thickness_above)
+                        if bbox.zlen > 1e-6 and min_thickness >= bbox.zlen * 0.1:
+                            candidates.append((cq.Vector(0, 0, z), cq.Vector(0, 0, 1), "STEP", 1.1))
+
+        # DISK_SIDE + DISK_RADIUS 후보:
+        # 원통 면이 2개 이상인 바디(계단형 원판)를 감지하면
+        # 1) 전역 중심 X/Y 절단 (DISK_SIDE, weight=3.0)
+        # 2) 각 원통의 실제 반지름 위치 X/Y 절단 (DISK_RADIUS, weight=3.5) ← 최고 우선순위
+        #    → 내부 원통 코어와 외부 링을 반지름 경계에서 분리해 포 조각 방지
+        cyl_faces = [f for f in body.faces().vals()
+                     if self.classifier._get_face_type(f) == "Cylinder"]
+        if len(cyl_faces) >= 2:
+            c = global_center
+            # 1) 중심 절단 (기존 DISK_SIDE)
+            if bbox.xmin + eps < c.x < bbox.xmax - eps:
+                candidates.append((cq.Vector(c.x, 0, 0), cq.Vector(1, 0, 0), "DISK_SIDE", 3.0))
+            if bbox.ymin + eps < c.y < bbox.ymax - eps:
+                candidates.append((cq.Vector(0, c.y, 0), cq.Vector(0, 1, 0), "DISK_SIDE", 3.0))
+            # 2) 각 원통 반지름 위치 절단 (DISK_RADIUS)
+            try:
+                from OCP.BRep import BRep_Tool
+                from OCP.GeomAdaptor import GeomAdaptor_Surface
+                from OCP.GeomAbs import GeomAbs_Cylinder
+                seen_radii = set()
+                for cyl_face in cyl_faces:
+                    try:
+                        surface = BRep_Tool.Surface_s(cyl_face.wrapped)
+                        adaptor = GeomAdaptor_Surface(surface)
+                        if adaptor.GetType() == GeomAbs_Cylinder:
+                            cyl_geom = adaptor.Cylinder()
+                            radius = round(cyl_geom.Radius(), 1)
+                            ax = cyl_geom.Axis().Direction()
+                            # 수직 원통(Z축 방향)만 처리
+                            if abs(ax.Z()) > 0.9 and radius not in seen_radii:
+                                seen_radii.add(radius)
+                                for x_offset in [c.x + radius, c.x - radius]:
+                                    if bbox.xmin + eps < x_offset < bbox.xmax - eps:
+                                        candidates.append((cq.Vector(x_offset, 0, 0),
+                                                           cq.Vector(1, 0, 0), "DISK_RADIUS", 3.5))
+                                for y_offset in [c.y + radius, c.y - radius]:
+                                    if bbox.ymin + eps < y_offset < bbox.ymax - eps:
+                                        candidates.append((cq.Vector(0, y_offset, 0),
+                                                           cq.Vector(0, 1, 0), "DISK_RADIUS", 3.5))
+                    except:
+                        pass
+            except:
+                pass
 
         return self._unify_candidates(candidates)
 
@@ -113,8 +163,20 @@ class StrategyPlanner:
             sliver_penalty = 0
             for p in parts:
                 p_val = p.val()
+                # 1) 부피 비율 체크 (1/40 이하 → 패널티)
                 vol_ratio = p_val.Volume() / self.total_volume
-                if vol_ratio < self.min_vol_ratio: sliver_penalty += 0.6
+                if vol_ratio < self.min_vol_ratio:
+                    sliver_penalty += 0.6
+                # 2) 납작한 포(thin slab) 체크 (aspect ratio > 8 → 패널티)
+                try:
+                    bb = p_val.BoundingBox()
+                    dims = sorted([bb.xlen, bb.ylen, bb.zlen])
+                    if dims[0] > 1e-6:
+                        ar = dims[2] / dims[0]
+                        if ar > 8.0:
+                            sliver_penalty += 0.6
+                except:
+                    pass
                 res = self.validator.calculate_hex_readiness(p)
                 total_score += res["total_score"]
             avg_score = total_score / len(parts)
