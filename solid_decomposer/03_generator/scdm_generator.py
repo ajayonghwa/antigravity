@@ -40,15 +40,17 @@ import base64
 import re
 import clr
 
-# [v4.44] 버전 무관 안전한 API 초기화
+# [v4.45] 투명한 디버깅을 위해 에러 출력 복구 및 API 임포트 최적화
 def setup_api():
     try:
         import SpaceClaim.Api as Api
         return Api
-    except:
+    except Exception as e:
+        print(" [DEBUG] Standard Import failed: " + str(e))
         for v in [22, 21, 20, 19, 18, 17]:
             try:
-                clr.AddReference("SpaceClaim.Api.V" + str(v))
+                ref = "SpaceClaim.Api.V" + str(v)
+                clr.AddReference(ref)
                 exec("import SpaceClaim.Api.V{{0}} as Api".format(v))
                 return Api
             except: continue
@@ -61,7 +63,9 @@ def get_api_obj(path):
         obj = SCDM_API
         for p in path.split('.'): obj = getattr(obj, p)
         return obj
-    except: return None
+    except Exception as e:
+        print(" [DEBUG] Failed to get API obj {{0}}: {{1}}".format(path, str(e)))
+        return None
 
 BODY_COMP_MAP = {{}}
 
@@ -99,7 +103,7 @@ def create_body_component(name_b64, body_idx):
         try:
             target_part = Part.Create(root.Document, comp_name)
             target_comp = Component.Create(root, target_part)
-        except: target_comp = None
+        except Exception as e: print(" [DEBUG] Comp Creation failed: " + str(e))
     BODY_COMP_MAP[body_idx] = target_comp
 
 def _move_body_to_comp(body, body_idx):
@@ -107,42 +111,48 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # [v4.44] ComponentHelper 안전 호출
+        # 1차 시도: ComponentHelper
         helper = get_api_obj("Modeler.ComponentHelper")
         if helper:
             helper.MoveBodiesToComponent(Selection.Create(body), target_comp)
             return True
-        # 백업: MoveToComponent 명령어
-        cmd = get_api_obj("Commands.MoveToComponent")
-        if cmd:
-            cmd.Execute(Selection.Create(body), target_comp, True, None)
-            return True
-        # 3차 백업: SetParent
-        body.SetParent(target_comp)
+        # 2차 시도: MoveToComponent (인자 줄임)
+        MoveToComponent.Execute(Selection.Create(body), target_comp)
         return True
-    except:
+    except Exception as e:
+        print(" [DEBUG] Standard move failed: " + str(e) + ". Trying fallback...")
         try:
-            new_shape = body.Shape.Copy()
-            DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
-            body.Delete()
+            body.SetParent(target_comp)
             return True
-        except: return False
+        except Exception as e2:
+            print(" [DEBUG] SetParent failed: " + str(e2) + ". Trying Manual Independence...")
+            try:
+                new_shape = body.Shape.Copy()
+                DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
+                body.Delete()
+                return True
+            except Exception as e3:
+                print(" [DEBUG] Manual Independence failed: " + str(e3))
+                return False
 
 def _get_dynamic_cutter_radius():
     try:
         r = GetRootPart().Range
         diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
-        return diag * 1.5
-    except: return 50.0
+        return diag * 2.0
+    except: return 100.0
 
 def _safe_split_multi(targets, cutter_face):
     if not targets: return False
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
+        # 4인자 규칙 시도
         SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
         return True
-    except: return False
+    except Exception as e:
+        print(" [DEBUG] SplitBody failed: " + str(e))
+        return False
 
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
@@ -160,10 +170,10 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
-            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split")
+            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split O-GRID")
             _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
-    except Exception as e: print("    [ERROR] " + str(e))
+    except Exception as e: print("    [ERROR] OGRID failed: " + str(e))
 
 def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
@@ -177,15 +187,21 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         radius = _get_dynamic_cutter_radius()
         circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
+        # [v4.45] FillMode 에러 해결을 위해 인자를 최소화하여 시도
+        try:
+            Fill.Execute(Selection.Create(design_curve))
+        except:
+            # 실패 시 매뉴얼대로 옵션 포함 시도
+            Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
+        
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
-            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split")
+            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split " + strategy)
             _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
-    except Exception as e: print("    [ERROR] " + str(e))
+    except Exception as e: print("    [ERROR] SplitPlane failed: " + str(e))
 
 def finalize(): print(" --- Finished ---")
 # --- INITIALIZATION ---
