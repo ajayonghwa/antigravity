@@ -56,8 +56,6 @@ def get_matching_bodies(body_b64):
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
     matched = []
-    # [v4.35] 숫자나 공백, 특수문자 등 모든 파편 네이밍 변종을 잡는 정규표현식
-    # AUTO_BODY_0 뿐만 아니라 AUTO_BODY_01, AUTO_BODY_0_1 등을 모두 포함
     pattern = re.compile(re.escape(target_name) + r"(_|\s|\(|\d|$)")
     for b in all_bodies:
         if pattern.match(b.Name): matched.append(b)
@@ -85,7 +83,8 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        MoveToComponent.Execute(Selection.Create(body), target_comp)
+        # [v4.37] Component.MoveBodiesToComponent API 사용 (가장 공식적인 방식)
+        Component.MoveBodiesToComponent(Selection.Create(body), target_comp)
         return True
     except:
         try: body.SetParent(target_comp); return True
@@ -106,7 +105,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     tname = base64.b64decode(body_b64).decode('utf-8')
-    print(" -> Step {{0}}: O-GRID for {{1}} ({{2}} pieces found)".format(idx, tname, len(targets)))
     origin_pt = Point.Create(center[0], center[1], center[2])
     direction = Direction.Create(axis[0], axis[1], axis[2])
     root = GetRootPart()
@@ -114,7 +112,8 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        ExtrudeEdges.Execute(Selection.Create(design_curve), 5.0, ExtrudeEdgeOptions(), None)
+        try: ExtrudeEdges.Execute(Selection.Create(design_curve), 5.0, ExtrudeEdgeOptions(), None)
+        except: pass
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
@@ -128,7 +127,6 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     tname = base64.b64decode(body_b64).decode('utf-8')
-    print(" -> Step {{0}}: {{1}} for {{2}} ({{3}} pieces found)".format(idx, strategy, tname, len(targets)))
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     root = GetRootPart()
