@@ -39,9 +39,13 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
     if isinstance(data, dict) and "bodies" in data:
         bodies_list = data["bodies"]
 
+    # [수정] 데이터 구조에서 단위(units) 정보를 가져옵니다.
+    current_units = data.get("units", "m")
+    print(f" - Model Units: {current_units}")
+
     for body in bodies_list:
         print(f"\n[Analyzing Body: {body.get('body_name', 'Unknown')}]")
-        strategy, plans = planner.analyze_body(body)
+        strategy, plans = planner.analyze_body(body, units=current_units)
         
         if plans:
             print(f" - Strategy: {strategy} ({len(plans)} plans)")
@@ -65,6 +69,7 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
     
     # 4. 분석 결과 리포트(MD) 생성
     guide_text = f"# Decomposition Strategy Report: {sub_device_name}\n"
+    guide_text += f"- **Model Units**: {current_units}\n"
     guide_text += "이 문서는 플래너가 수립한 각 바디별 상세 분할 계획을 담고 있습니다.\n\n"
     
     for body in bodies_list:

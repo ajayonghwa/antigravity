@@ -16,7 +16,8 @@ class StrategyPlanner:
         }
         self.display_scale = 1000.0
 
-    def analyze_body(self, body_data):
+    def analyze_body(self, body_data, units="m"):
+        self.units = units
         faces = body_data.get("faces", [])
         self.body_data = body_data
         

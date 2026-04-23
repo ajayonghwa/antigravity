@@ -9,11 +9,16 @@ if 'OUTPUT_PATH' not in globals():
 
 def get_face_data(face):
     """
-    사용자님의 어제자 성공 코드를 기반으로 한 면(Face) 정보 추출 로직
+    면(Face)의 기하학적 상세 정보를 추출합니다.
     """
-    # DesignFace 호환성 (오늘의 핵심 수정)
-    shape = face.Shape if hasattr(face, "Shape") else face
-    geometry = getattr(shape, 'Geometry', None)
+    # V22 호환성을 위한 Shape/Geometry 접근
+    shape = face
+    try: shape = face.Shape
+    except: pass
+    
+    geometry = None
+    try: geometry = shape.Geometry
+    except: pass
     
     data = {
         "id": getattr(face, 'Id', 0),
@@ -22,7 +27,7 @@ def get_face_data(face):
         "box": {"min": [0,0,0], "max": [0,0,0]}
     }
     
-    # 바운딩 박스
+    # Bounding Box 추출
     try:
         r = getattr(shape, 'Range', getattr(face, 'Box', getattr(face, 'BoundingBox', None)))
         if r:
@@ -31,62 +36,63 @@ def get_face_data(face):
     except: pass
 
     if geometry:
-        # 타입 판별
-        shape_type = str(getattr(geometry, 'Shape', geometry.GetType().Name))
+        # 타입 판별 및 세부 파라미터 수집
+        shape_type = str(geometry.GetType().Name)
         data["type"] = shape_type
         
         try:
             frame = getattr(geometry, 'Frame', None)
             
-            # 실린더(Cylinder) 및 내경 판별
+            # 실린더형 (Cylinder, Conical)
             if "Cylinder" in shape_type or "Conical" in shape_type:
                 data["radius"] = getattr(geometry, 'Radius', 0)
-                data["is_internal"] = getattr(shape, 'IsInternal', False)
+                # 내경/외경 판별 로직 (Reversed Orientation 체크)
+                is_internal = False
+                try:
+                    if hasattr(shape, 'Orientation') and str(shape.Orientation) == 'Reversed':
+                        is_internal = True
+                except: pass
+                data["is_internal"] = is_internal
                 
                 if frame:
                     data["axis"] = [frame.DirZ.X, frame.DirZ.Y, frame.DirZ.Z]
                     data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
-                
-                # --- 사용자님 전용 Validator 복구 ---
-                try:
-                    if hasattr(shape, 'Orientation') and str(shape.Orientation) == 'Reversed':
-                        data["is_internal"] = True
-                    else:
-                        try:
-                            # 법선 벡터 평가를 통한 Hole 검증
-                            # SpaceClaim API의 Parameter/Vector 객체 사용
-                            param = Parameter.Create(0.5, 0.5)
-                            normal = shape.NormalAt(param)
-                            bbox = getattr(shape, 'Box', getattr(shape, 'BoundingBox', None))
-                            if bbox:
-                                center = bbox.Center
-                                radial = Vector.Create(center.X, center.Y, 0).Direction
-                                if Vector.Dot(radial, normal) < -0.1:
-                                    data["is_internal"] = True
-                        except: pass
-                except: pass
             
-            # 평면(Plane)
+            # 평면형 (Plane)
             elif "Plane" in shape_type:
                 if frame:
                     data["normal"] = [frame.DirZ.X, frame.DirZ.Y, frame.DirZ.Z]
                     data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
-                
-            # 토로이달(Toroidal)
+                    
+            # 토로이달 (Toroidal - Elbow 등)
             elif "Toroidal" in shape_type:
                 data["radius"] = getattr(geometry, 'MajorRadius', 0)
                 data["minor_radius"] = getattr(geometry, 'MinorRadius', 0)
                 if frame:
                     data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
+                    data["axis"] = [frame.DirZ.X, frame.DirZ.Y, frame.DirZ.Z]
         except: pass
             
     return data
 
 def extract_geometry():
-    print("--- Starting Full Geometry Extraction ---")
+    print("--- Starting Detailed Geometry Extraction (v3.4) ---")
     all_bodies_data = []
+    warnings = []
     
-    # 1. 대상 바디 수집 (재귀적 탐색으로 컴포넌트 내부 바디까지 수집)
+    # 1. 시스템 단위(Units) 추출
+    unit_str = "Unknown"
+    try:
+        # SpaceClaim API에서 활성 문서의 단위 설정 확인
+        # V22에서는 Session.ActiveDocument.Units 등을 사용할 수도 있으나 GetRootPart 기반이 안전
+        root = GetRootPart()
+        # 일반적으로 SCDM 내부 연산은 Meter 기준이지만, 사용자 표시 단위 확인 시도
+        try: unit_str = str(root.Document.Units.Length.Symbol)
+        except: unit_str = "m (System Default)"
+    except: pass
+    print(" - Model Units Detected: {0}".format(unit_str))
+
+    # 2. 모든 바디 수집 (재귀적 탐색)
     def get_all_bodies_recursive(part, body_list):
         for body in part.Bodies:
             body_list.append(body)
@@ -96,153 +102,120 @@ def extract_geometry():
 
     bodies = []
     try:
-        root = GetRootPart()
-        get_all_bodies_recursive(root, bodies)
+        get_all_bodies_recursive(GetRootPart(), bodies)
     except Exception as e:
         print("Error during body collection: " + str(e))
-        return []
+        return [], [str(e)]
             
-    print("Found {0} bodies in total (including components).".format(len(bodies)))
-
-    # [추가] 중복 이름 감지
-    name_count = {}
-    for body in bodies:
-        try:
-            name = getattr(body, 'Name', 'Unknown')
-            name_count[name] = name_count.get(name, 0) + 1
-        except: pass
-    
-    duplicates = {k: v for k, v in name_count.items() if v > 1}
-    warnings = []
-    if duplicates:
-        print("WARNING: Duplicate body names detected:")
-        for name, count in duplicates.items():
-            print("  - '{0}' x {1}".format(name, count))
-            warnings.append("Duplicate name '{0}' found {1} times.".format(name, count))
+    print("Found {0} bodies in total.".format(len(bodies)))
 
     for i, body in enumerate(bodies):
         try:
-            # [핵심] 원래의 전체 경로 이름을 보관 (슬래시 통일)
+            # 바디 식별 이름 수집
             original_full_name = "Unknown"
-            fn = getattr(body, 'GetFullName', None)
-            if fn: 
-                original_full_name = fn().replace("\\", "/")
-            elif hasattr(body, 'Name'): 
-                original_full_name = body.Name
-
-            # [핵심] 바디 이름을 고유한 ID로 변경하여 충돌 방지 (3단계 방어 체계)
-            unique_name = "AUTO_BODY_" + str(i)
-            id_method = "rename"
-            try:
-                body.Name = unique_name
-                print(" - Renamed: {0} -> {1}".format(original_full_name, unique_name))
-            except Exception as e:
-                # 2단계: Attribute 백업
-                id_method = "attribute"
-                try:
-                    body.SetTextAttribute("AutoDecomp.UniqueID", unique_name)
-                    print(" - Rename failed, used Attribute for {0}".format(original_full_name))
-                except:
-                    # 3단계: Fingerprint
-                    id_method = "fingerprint"
-                    print(" - Attribute failed, using Fingerprint for {0}".format(original_full_name))
-
-            volume = getattr(body, 'Volume', 0)
-            if hasattr(body, 'Shape'): volume = getattr(body.Shape, 'Volume', volume)
-
-            # Fingerprint calculation if needed
-            fingerprint = ""
-            if id_method == "fingerprint":
-                try:
-                    r = getattr(body.Shape, 'Range', getattr(body, 'Box', getattr(body, 'BoundingBox', None)))
-                    if r:
-                        cx = (r.Min.X + r.Max.X) / 2.0
-                        cy = (r.Min.Y + r.Max.Y) / 2.0
-                        cz = (r.Min.Z + r.Max.Z) / 2.0
-                        fingerprint = "HASH_{0:.6f}_{1:.6f}_{2:.6f}_{3:.6f}".format(volume, cx, cy, cz)
-                        unique_name = fingerprint
+            try: original_full_name = body.GetFullName().replace("\\", "/")
+            except: 
+                try: original_full_name = body.Name
                 except: pass
 
+            # 바디 고유 ID 부여 및 이름 변경 (추적 용도)
+            unique_name = "AUTO_BODY_" + str(i)
+            try: body.Name = unique_name
+            except: pass
+
+            # 기본 정보
+            volume = 0
+            try: volume = body.Shape.Volume
+            except: 
+                try: volume = body.Volume
+                except: pass
+                
             body_data = {
                 "body_index": i,
                 "body_name": unique_name,
                 "original_name": original_full_name,
-                "id_method": id_method,
-                "fingerprint": fingerprint,
                 "volume": volume,
                 "faces": [],
                 "adjacency": [],
                 "identified_holes": []
             }
             
-            # 면 정보 추출
-            faces = getattr(body, 'Faces', [])
+            # 면 상세 정보 추출
             face_map = {}
+            faces = []
+            try: faces = list(body.Faces)
+            except: 
+                try: faces = list(body.Shape.Faces)
+                except: pass
+                
             for j, face in enumerate(faces):
                 f_data = get_face_data(face)
                 f_data["index"] = j
                 body_data["faces"].append(f_data)
                 face_map[face] = j
                 
-            # 인접성(Adjacency) 추출 (원래 있던 기능 복구)
+            # 면 간 인접성 추출
             try:
-                edges = getattr(body, 'Edges', [])
+                edges = []
+                try: edges = body.Edges
+                except: edges = body.Shape.Edges
+                
                 for edge in edges:
-                    adj_faces = getattr(edge, 'Faces', [])
-                    if hasattr(adj_faces, 'Count') and adj_faces.Count == 2:
+                    adj_faces = edge.Faces
+                    if adj_faces.Count == 2:
                         idx1 = face_map.get(adj_faces[0])
                         idx2 = face_map.get(adj_faces[1])
                         if idx1 is not None and idx2 is not None:
                             body_data["adjacency"].append([idx1, idx2])
             except: pass
             
-            # [추가] IdentifyHoles API를 통한 물리적 홀 식별
+            # 물리적 홀 식별 (IdentifyHoles API 활용)
             try:
-                # 스페이스클레임 API 로드가 되어있다고 가정
                 from SpaceClaim.Api.V22.Modeler import IdentifyHoleOptions
-                options = IdentifyHoleOptions()
-                holes = body.IdentifyHoles(options)
+                holes = body.IdentifyHoles(IdentifyHoleOptions())
                 for hole in holes:
                     hole_data = {
-                        "type": "Through" if getattr(hole, 'Through', True) else "Blind",
-                        "diameter": getattr(hole, 'DrillSize', 0.0),
-                        "depth": getattr(hole, 'Depth', 0.0),
-                        "has_counterbore": getattr(hole, 'Counterbore', None) is not None,
-                        "has_countersink": getattr(hole, 'Countersink', None) is not None
+                        "type": "Through" if hole.Through else "Blind",
+                        "diameter": hole.DrillSize,
+                        "depth": hole.Depth,
+                        "has_counterbore": hole.Counterbore is not None,
+                        "has_countersink": hole.Countersink is not None
                     }
                     try:
-                        axis = hole.Axis
-                        hole_data["axis"] = [axis.Direction.X, axis.Direction.Y, axis.Direction.Z]
-                        hole_data["origin"] = [axis.Origin.X, axis.Origin.Y, axis.Origin.Z]
+                        hole_data["axis"] = [hole.Axis.Direction.X, hole.Axis.Direction.Y, hole.Axis.Direction.Z]
+                        hole_data["origin"] = [hole.Axis.Origin.X, hole.Axis.Origin.Y, hole.Axis.Origin.Z]
                     except: pass
                     body_data["identified_holes"].append(hole_data)
             except: pass
                     
             all_bodies_data.append(body_data)
-            print(" - Processed: {0}".format(unique_name))
-        except: continue
+            print(" - [Success] Extracted Body: {0} ({1} faces)".format(unique_name, len(body_data["faces"])))
+            
+        except Exception as e:
+            msg = "Failed to process body {0}: {1}".format(i, str(e))
+            print(" !! " + msg)
+            warnings.append(msg)
+            continue
         
-    return all_bodies_data, warnings
+    return all_bodies_data, warnings, unit_str
 
-# 메인 실행부
+# 메인 실행
 try:
-    results, warnings = extract_geometry()
+    results, warnings, unit_info = extract_geometry()
     
-    # 파이프라인 호환용 래핑 구조
     final_data = {
         "sub_device_name": "DEVICE",
-        "units": "m",
+        "units": unit_info,
         "warnings": warnings,
         "bodies": results
     }
     
-    # 폴더 자동 생성
+    # 폴더 자동 생성 및 저장
     target_dir = os.path.dirname(OUTPUT_PATH)
     if target_dir and not os.path.exists(target_dir): os.makedirs(target_dir)
         
     with open(OUTPUT_PATH, "w") as f:
         json.dump(final_data, f, indent=2)
-        
-    print("--- SUCCESS: " + OUTPUT_PATH + " ---")
+    print("\n[Result] Geometry data saved to: " + OUTPUT_PATH)
 except Exception as e:
-    print("FATAL ERROR: " + str(e))
+    print("\n[Critical Error] Extraction failed: " + str(e))
