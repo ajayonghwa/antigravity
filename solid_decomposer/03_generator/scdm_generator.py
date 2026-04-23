@@ -150,12 +150,15 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
-        # [v4.97] O-Grid 원통형 생성
+        # [v4.98] 사용자가 제안한 상세 ExtrudeEdges 구문 적용
         try:
             frame = Frame.Create(origin_pt, direction)
             circle = Circle.Create(frame, offset)
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), None, MM(10000), None, None)
+            
+            # 사용자 제안 형식: Selection, Point, Direction, Distance, Options, Info
+            # 10m(10,000mm)만큼 지정된 방향으로 추출
+            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), None, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
