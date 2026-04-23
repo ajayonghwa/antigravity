@@ -1,0 +1,77 @@
+{
+    "auto_cylinder.step": [
+        {
+            "strategy": "OGRID",
+            "params": { "radius_ratio": 0.5 },
+            "reasoning": "Standard O-Grid for core-shell structured mesh."
+        },
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [0, 0, 0], "normal": [0, 0, 1] },
+            "reasoning": "Axial cut to reduce aspect ratio of the core."
+        }
+    ],
+    "auto_perforated.step": [
+        {
+            "strategy": "OGRID",
+            "params": { "center": [0, 0, 0], "axis": [0, 0, 1], "radius": 15 },
+            "reasoning": "Step 1: Isolate the central hole first."
+        },
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [0, 0, 0], "normal": [1, 0, 0] },
+            "reasoning": "Step 2: Split the web between isolated holes."
+        }
+    ],
+    "lv3_t_junction.step": [
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [20, 0, 0], "normal": [1, 0, 0] },
+            "reasoning": "Isolate branch A"
+        },
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [-20, 0, 0], "normal": [1, 0, 0] },
+            "reasoning": "Isolate branch B"
+        },
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [0, 20, 0], "normal": [0, 1, 0] },
+            "reasoning": "Isolate junction core"
+        }
+    ],
+    "lv4_final_boss.step": [
+        {
+            "strategy": "OGRID",
+            "params": { "center": [0, 0, 0], "axis": [0, 0, 1], "radius": 20 },
+            "reasoning": "Step 1: Isolate the TOP blind hole using O-Grid."
+        },
+        {
+            "strategy": "OGRID",
+            "params": { "center": [70, 0, 0], "axis": [0, 1, 0], "radius": 15 },
+            "reasoning": "Step 2: Isolate the BOSS hole using O-Grid."
+        },
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [50, 0, 0], "normal": [1, 0, 0] },
+            "reasoning": "Step 3: Separate the now-clean boss from the block."
+        },
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [0, 0, -20], "normal": [0, 0, 1] },
+            "reasoning": "Step 4: Horizontal cut to finalize the blind hole bottom."
+        }
+    ],
+    "lv2_sq_to_circ.step": [
+        {
+            "strategy": "PLANAR",
+            "params": { "origin": [0, 0, 0], "normal": [0, 0, 1] },
+            "reasoning": "Separate transition zone from the base."
+        },
+        {
+            "strategy": "SECTOR",
+            "params": { "num_sectors": 4 },
+            "reasoning": "Quadrant split to simplify the complex lofted faces."
+        }
+    ]
+}

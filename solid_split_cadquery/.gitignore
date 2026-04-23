@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+input/
+output/
+examples/report/images/
+progress_log.json
+*.step
+*.stp
+.DS_Store
