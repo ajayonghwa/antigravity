@@ -40,12 +40,23 @@ import base64
 import re
 import clr
 
-# [매뉴얼 1번 지침] API 참조 및 전역 네임스페이스 임포트
-clr.AddReference("SpaceClaim.Api.V22")
-from SpaceClaim.Api.V22 import *
-from SpaceClaim.Api.V22.Modeler import *
-from SpaceClaim.Api.V22.Geometry import *
-from SpaceClaim.Api.V22.Commands import *
+# [매뉴얼 15번 지침] 동적 API 초기화 로직
+def initialize_scdm_api():
+    for v in range(22, 16, -1):
+        try:
+            ref_name = "SpaceClaim.Api.V" + str(v)
+            clr.AddReference(ref_name)
+            return v
+        except: continue
+    return None
+
+API_VER = initialize_scdm_api()
+if API_VER:
+    # 전역 네임스페이스 로드 (매뉴얼 16번)
+    exec("from SpaceClaim.Api.V{0} import *".format(API_VER))
+    exec("from SpaceClaim.Api.V{0}.Modeler import *".format(API_VER))
+    exec("from SpaceClaim.Api.V{0}.Geometry import *".format(API_VER))
+    # Commands는 exec를 통해 명시적 호출 없이 사용 가능해짐
 
 BODY_COMP_MAP = {{}}
 
@@ -91,12 +102,12 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # [매뉴얼 2번 지침] 4개 인자 규칙 적용 (MoveToComponent.Execute)
-        MoveToComponent.Execute(Selection.Create(body), target_comp, True, None)
+        # [매뉴얼 지침] ComponentHelper를 통한 이동
+        ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
         return True
     except:
         try:
-            # [매뉴얼 12번 지침] 최후의 수단: 기하 복사 후 이동
+            # 실패 시 최후의 수단 (매뉴얼 12번 지침 응용)
             new_shape = body.Shape.Copy()
             DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
             body.Delete()
@@ -104,7 +115,6 @@ def _move_body_to_comp(body, body_idx):
         except: return False
 
 def _get_dynamic_cutter_radius():
-    # [매뉴얼 8번 지침] 모델 크기에 따른 동적 스케일링
     try:
         r = GetRootPart().Range
         diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
@@ -116,7 +126,7 @@ def _safe_split_multi(targets, cutter_face):
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
-        # [매뉴얼 2번 지침] 4개 인자 규칙 적용
+        # [매뉴얼 2번 지침] 4인자 규칙
         SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
         return True
     except: return False
@@ -132,7 +142,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        # [매뉴얼 2번 지침] 4인자 규칙
         ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
@@ -155,7 +164,7 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         radius = _get_dynamic_cutter_radius()
         circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        # [매뉴얼 4번 지침] SECTOR/AXIAL은 Fill.Execute 사용
+        # [매뉴얼 4번 지침] Fill.Execute 사용
         Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]

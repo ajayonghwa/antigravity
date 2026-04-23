@@ -3,18 +3,23 @@ import json
 import os
 import clr
 
-def initialize_api():
-    # [매뉴얼 1번 지침] API 참조 및 전역 네임스페이스 임포트
-    try:
-        clr.AddReference("SpaceClaim.Api.V22")
-        from SpaceClaim.Api.V22 import *
-        from SpaceClaim.Api.V22.Modeler import *
-        from SpaceClaim.Api.V22.Geometry import *
-        from SpaceClaim.Api.V22.Commands import *
-        return True
-    except: return False
+# [매뉴얼 15번 지침] V22~V17 역순으로 참조 추가하는 동적 초기화
+def initialize_scdm_api():
+    for v in range(22, 16, -1):
+        try:
+            ref_name = "SpaceClaim.Api.V" + str(v)
+            clr.AddReference(ref_name)
+            # 성공 시 해당 버전의 네임스페이스 반환
+            return v
+        except: continue
+    return None
 
-initialize_api()
+API_VER = initialize_scdm_api()
+if API_VER:
+    # 동적 임포트 (전역 네임스페이스에 풀기 - 매뉴얼 16번)
+    exec("from SpaceClaim.Api.V{0} import *".format(API_VER))
+    exec("from SpaceClaim.Api.V{0}.Modeler import *".format(API_VER))
+    exec("from SpaceClaim.Api.V{0}.Geometry import *".format(API_VER))
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
@@ -44,7 +49,6 @@ def apply_mat(m, p):
     return [x, y, z]
 
 def get_face_data(face, matrix):
-    # [v4.42] 매뉴얼 11번 지침에 따라 고유 식별을 위해 GetHashCode 사용
     f_id = face.GetHashCode()
     data = {"id": f_id, "type": "Unknown", "area": 0.0, "box": {"min": [0,0,0], "max": [0,0,0]}, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
     try:
@@ -53,6 +57,7 @@ def get_face_data(face, matrix):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
+            # 4.43: Matrix.Identity를 동적으로 가져옴
             from SpaceClaim.Api.V22.Geometry import Matrix as ScMatrix
             bbox = face.GetBoundingBox(ScMatrix.Identity)
             data["origin"] = [bbox.Center.X, bbox.Center.Y, bbox.Center.Z]
@@ -72,7 +77,7 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Manual-based Extraction (v4.42) ---")
+    print("--- SCDM Dynamic API Extraction (v4.43) ---")
     all_bodies_data = []
     root = GetRootPart()
     try: bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
@@ -87,17 +92,14 @@ def extract_geometry():
             if comp: matrix_py = get_python_matrix_from_obj(comp.TransformToRoot)
         except: pass
         
-        original_name = body.Name
         unique_name = "AUTO_BODY_" + str(i)
-        
-        # [v4.42] 이름 변경이 실패해도 진행 (매뉴얼 9번)
         try: body.Name = unique_name
         except: pass
         
         actual_name = body.Name
         print(" - [OK] {0} (Pos: {1:.4f}, {2:.4f}, {3:.4f})".format(actual_name, matrix_py[0][3], matrix_py[1][3], matrix_py[2][3]))
         
-        body_data = {"body_index": i, "body_name": actual_name, "original_name": original_name, "volume": getattr(body.Shape, "Volume", 0.0), "faces": []}
+        body_data = {"body_index": i, "body_name": actual_name, "original_name": body.Name, "volume": getattr(body.Shape, "Volume", 0.0), "faces": []}
         for j, face in enumerate(list(body.Faces)):
             try:
                 fdata = get_face_data(face, matrix_py)
