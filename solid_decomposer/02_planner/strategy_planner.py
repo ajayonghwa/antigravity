@@ -218,9 +218,13 @@ class StrategyPlanner:
             # 3. 간섭을 고려한 O-Grid 계획
             plans.extend(self._plan_ogrid_for_hole(h1, main_axis, neighbor_gap=min_gap))
             
-        # [v4.1 추가] 원판 전체에 대한 4분할(Sector) 추가 - 격자 뼈대 형성
+        # [v4.4 추가] 원판 전체에 대한 4분할(Sector) - 가장 큰 구멍(또는 바디 센터) 기준
         if len(holes) > 0:
-            plans.extend(self._generate_cross_sectors(self.body_center, main_axis))
+            # 가장 큰 구멍의 중심을 찾음
+            main_hole = holes[0] # 이미 크기순 정렬됨
+            h_box = main_hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
+            h_center = (np.array(h_box["min"]) + np.array(h_box["max"])) / 2.0
+            plans.extend(self._generate_cross_sectors(h_center, main_axis))
             
         return plans
 
@@ -375,19 +379,17 @@ class StrategyPlanner:
         # 남은 벽 두께(Rib thickness) 계산
         rib_thickness = min_wall_dist - radius
         
-        # 안전 진단: 남은 벽이 너무 얇거나 오프셋이 벽을 뚫고 나가는 경우
-        if rib_thickness < radius * 0.2 or safe_offset > min_wall_dist * 0.95:
-            print("    !! Safety Warning: Rib too thin ({0:.2f}mm). Skipping O-Grid.".format(rib_thickness * 1000))
+        # [v4.4] 안전 마진 완화 (메인 구멍 누락 방지)
+        if rib_thickness < radius * 0.1 or (safe_offset > min_wall_dist * 0.98 and radius < 0.05):
+            print("    !! Safety Skip: Rib too thin ({0:.2f}mm) for radius {1:.1f}mm".format(rib_thickness * 1000, radius*1000))
             return []
             
         return [self._create_ogrid_dict(hole, axis, safe_offset)]
 
     def _create_ogrid_dict(self, hole, axis, offset):
-        # [v4.2] 추출된 지오메트리 원점이 있으면 우선적으로 사용
-        origin = hole.get("origin")
-        if origin is None:
-            box = hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
-            origin = (np.array(box["min"]) + np.array(box["max"])) / 2.0
+        # [v4.4] 가장 안정적인 바운딩 박스 중앙값 사용 (Stable v1 방식)
+        box = hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
+        origin = (np.array(box["min"]) + np.array(box["max"])) / 2.0
             
         return {
             "strategy": "OGRID",
