@@ -343,18 +343,27 @@ class StrategyPlanner:
 
     def _plan_ogrid_for_hole(self, hole, axis, neighbor_gap=None):
         radius = hole.get("radius", 0)
-        if radius < 0.0005: return [] # 0.5mm 미만 제외
+        if radius < 0.0005: return [] 
         
-        # [강화] 간섭 방지 오프셋 계산
-        # 기본은 반지름의 0.6배지만, 이웃과의 간격이 좁으면 그 절반 이하로 줄임
-        safe_offset = radius * 0.6
-        if neighbor_gap is not None:
-            # 이웃과의 틈새(gap)의 40% 정도만 사용하도록 제한 (충돌 방지 최후의 보루)
-            if neighbor_gap < safe_offset * 2:
-                safe_offset = max(neighbor_gap * 0.4, radius * 0.2)
-                print("    !! Tight gap detected ({0:.2f}mm). Adjusting offset to {1:.2f}mm".format(neighbor_gap*1000, safe_offset*1000))
+        # [v4.3] 내경(Hole)인 경우 바깥쪽으로, 외경인 경우 안쪽으로 오프셋 설정
+        is_internal = hole.get("is_internal", True)
+        if is_internal:
+            # 구멍 바깥쪽 솔리드를 잘라야 함
+            safe_offset = radius * 1.3
+            # 간섭 체크: 이웃과의 간격이 좁으면 오프셋을 줄임
+            if neighbor_gap is not None and neighbor_gap < (safe_offset - radius) * 2:
+                safe_offset = radius + (neighbor_gap * 0.4)
+        else:
+            # 실린더 내부를 잘라야 함
+            safe_offset = radius * 0.7
+            
+        print("    >> Hole at {0}: Radius={1:.2f}, Offset={2:.2f} ({3})".format(
+            [round(x*1000,1) for x in hole.get("origin", [0,0,0])], 
+            radius*1000, safe_offset*1000, 
+            "Internal/Hole" if is_internal else "External"
+        ))
 
-        # 바디 외곽까지의 최소 거리 (WHR 체크)
+        # [v4.3.1] 바디 외곽까지의 최소 거리 (WHR/Rib Safety 체크)
         origin = np.array(hole.get("origin", self.body_center))
         min_wall_dist = float('inf')
         for i in range(3):
@@ -363,9 +372,12 @@ class StrategyPlanner:
                 d2 = abs(origin[i] - (self.body_center[i] + self.body_size[i]/2))
                 min_wall_dist = min(min_wall_dist, d1, d2)
         
-        # 벽면과의 간격이 너무 좁으면(오프셋보다 작으면) 실패 확률 높음 -> 건너뜀
-        if min_wall_dist < safe_offset * 1.1:
-            print("    !! Hole too close to boundary. Skipping O-Grid to prevent split failure.")
+        # 남은 벽 두께(Rib thickness) 계산
+        rib_thickness = min_wall_dist - radius
+        
+        # 안전 진단: 남은 벽이 너무 얇거나 오프셋이 벽을 뚫고 나가는 경우
+        if rib_thickness < radius * 0.2 or safe_offset > min_wall_dist * 0.95:
+            print("    !! Safety Warning: Rib too thin ({0:.2f}mm). Skipping O-Grid.".format(rib_thickness * 1000))
             return []
             
         return [self._create_ogrid_dict(hole, axis, safe_offset)]

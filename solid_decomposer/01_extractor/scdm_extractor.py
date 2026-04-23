@@ -70,12 +70,12 @@ def get_face_data(face):
             if "Cylinder" in g_type or "Conical" in g_type:
                 if hasattr(geom, "Radius"): data["radius"] = geom.Radius
                 
-                # [v4.2] 지오메트리 원점을 명시적으로 저장 (가장 중요)
+                # [v4.3] 지오메트리 원점 및 축 추출 (절대 좌표계 기준)
                 if frame:
                     data["origin"] = [frame.Origin.X, frame.Origin.Y, frame.Origin.Z]
                     data["axis"] = [frame.DirZ.X, frame.DirZ.Y, frame.DirZ.Z]
                 
-                # 내경 판별
+                # [v4.3] 면의 뒤집힘(Orientation) 정보를 더 명확히 저장하여 플래너에 전달
                 data["is_internal"] = False
                 if hasattr(shape, "Orientation"):
                     if str(shape.Orientation) == "Reversed":
