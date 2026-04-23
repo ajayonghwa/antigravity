@@ -3,7 +3,7 @@ import json
 import os
 import clr
 
-# [v4.63] Component 위치 속성 대응 (Placement/Transform) 및 적응형 행렬 연산
+# [v4.64] IDocObject.TransformToMaster.Inverse를 활용한 정석적인 변환 로직
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -16,104 +16,97 @@ except Exception as e:
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
-def get_face_data(face, matrix):
+def get_face_data(face, matrix_obj):
     f_id = face.GetHashCode()
     data = {"id": f_id, "type": "Unknown", "area": face.Area * 1e6, "box": {"min": [0,0,0], "max": [0,0,0]}, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
     try:
         shape = face.Shape
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
-        bbox = face.GetBoundingBox(Matrix.Identity)
+        
+        # 1. 루트 기준 바운딩 박스 추출 (API Matrix 객체 직접 사용)
+        bbox = face.GetBoundingBox(matrix_obj)
         c = bbox.Center
-        gx = matrix[0][0]*c.X + matrix[0][1]*c.Y + matrix[0][2]*c.Z + matrix[0][3]/1000.0
-        gy = matrix[1][0]*c.X + matrix[1][1]*c.Y + matrix[1][2]*c.Z + matrix[1][3]/1000.0
-        gz = matrix[2][0]*c.X + matrix[2][1]*c.Y + matrix[2][2]*c.Z + matrix[2][3]/1000.0
-        data["origin"] = [round(gx * 1000.0, 6), round(gy * 1000.0, 6), round(gz * 1000.0, 6)]
+        data["origin"] = [round(c.X * 1000.0, 6), round(c.Y * 1000.0, 6), round(c.Z * 1000.0, 6)]
+        
+        # 2. 반경 추출 (Edge 기반 Fallback 포함)
         r = 0.0
         if hasattr(geom, "Radius"): r = geom.Radius
         elif hasattr(geom, "Radius0"): r = geom.Radius0
         if r <= 0:
             for edge in face.Edges:
                 if hasattr(edge.Shape.Geometry, "Radius"): r = edge.Shape.Geometry.Radius; break
+        
         if r > 0:
             data["radius"] = round(r * 1000.0, 6)
             if str(shape.Orientation) == "Reversed": data["is_internal"] = True
+            
+        # 3. 축(Axis) 계산 (Matrix 회전 성분 적용)
         if hasattr(geom, "Frame"):
             f = geom.Frame
-            nz_x = matrix[0][0]*f.DirZ.X + matrix[0][1]*f.DirZ.Y + matrix[0][2]*f.DirZ.Z
-            nz_y = matrix[1][0]*f.DirZ.X + matrix[1][1]*f.DirZ.Y + matrix[1][2]*f.DirZ.Z
-            nz_z = matrix[2][0]*f.DirZ.X + matrix[2][1]*f.DirZ.Y + matrix[2][2]*f.DirZ.Z
+            m = matrix_obj
+            nz_x = m.M11*f.DirZ.X + m.M12*f.DirZ.Y + m.M13*f.DirZ.Z
+            nz_y = m.M21*f.DirZ.X + m.M22*f.DirZ.Y + m.M23*f.DirZ.Z
+            nz_z = m.M31*f.DirZ.X + m.M32*f.DirZ.Y + m.M33*f.DirZ.Z
             data["axis"] = [round(nz_x, 6), round(nz_y, 6), round(nz_z, 6)]
     except: pass
     return data
 
-def walk_hierarchy(part, current_matrix, results):
-    for body in part.Bodies:
-        results.append((body, current_matrix))
-    for comp in part.Components:
-        # [v4.63] Adaptive Transform Discovery
-        t_obj = None
-        for attr in ["Placement", "Transform", "TransformToRoot"]:
-            if hasattr(comp, attr):
-                t_obj = getattr(comp, attr); break
-        
-        m_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
-        if t_obj:
-            try:
-                # 1. Transform 객체인 경우 (Matrix + Translation 포함)
-                if hasattr(t_obj, "Matrix") and hasattr(t_obj, "Translation"):
-                    m = t_obj.Matrix
-                    tr = t_obj.Translation
-                    m_py = [[m.M11, m.M12, m.M13, tr.X*1000.0], [m.M21, m.M22, m.M23, tr.Y*1000.0], [m.M31, m.M32, m.M33, tr.Z*1000.0]]
-                # 2. Matrix 자체인 경우
-                elif hasattr(t_obj, "M11"):
-                    m_py = [[t_obj.M11, t_obj.M12, t_obj.M13, 0.0], [t_obj.M21, t_obj.M22, t_obj.M23, 0.0], [t_obj.M31, t_obj.M32, t_obj.M33, 0.0]]
-            except: pass
-        walk_hierarchy(comp.Template, m_py, results)
-
 def extract_geometry():
-    print("--- SCDM Adaptive Extraction (v4.63) ---")
-    all_bodies_raw = []
+    print("--- SCDM Occurrence-Based Extraction (v4.64) ---")
+    final_bodies_data = []
     try:
         root = GetRootPart()
-        if not root: root = Application.GetActiveDocument().MainPart
-        print(" - Scanning Root: " + root.Name)
-        identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
-        walk_hierarchy(root, identity, all_bodies_raw)
+        if not root:
+            try: root = Application.GetActiveDocument().MainPart
+            except: pass
+        if not root: return [], [], "mm"
         
-        # 방식 2 (GetDescendants) 보완
-        if not all_bodies_raw:
+        print(" - Active Root: " + root.Name)
+        
+        # 모든 디자인 바디 오커런스 추출 (계층 구조 자동 포함)
+        all_bodies = list(root.GetDescendants[IDesignBody]())
+        if not all_bodies:
+            print(" - [WARN] No bodies found via GetDescendants. Trying manual fallback...")
+            all_bodies = list(root.Bodies)
+            for comp in root.Components:
+                for b in comp.Template.Bodies: all_bodies.append(b)
+
+        print(" - Total occurrences identified: {0}".format(len(all_bodies)))
+        
+        for i, body in enumerate(all_bodies):
             try:
-                for b in root.GetDescendants[IDesignBody](): all_bodies_raw.append((b, identity))
-            except: pass
-    except: pass
-    
-    unique_bodies = []
-    seen = set()
-    for b, m in all_bodies_raw:
-        h = b.GetHashCode()
-        if h not in seen: unique_bodies.append((b, m)); seen.add(h)
+                b_name = "Body_" + str(i)
+                try: b_name = body.Name
+                except: pass
+                
+                # [v4.64] 오커런스 변환의 정석: TransformToMaster.Inverse
+                # root에서 body로 가는 변환 행렬을 즉시 얻음
+                total_matrix = Matrix.Identity
+                if body.Instance:
+                    total_matrix = body.TransformToMaster.Inverse
+                
+                vol = 0.0
+                try: vol = body.Shape.Volume * 1e9
+                except: pass
+                
+                bdata = {"body_index": i, "body_name": b_name, "volume": vol, "faces": []}
+                for face in list(body.Faces):
+                    bdata["faces"].append(get_face_data(face, total_matrix))
+                
+                final_bodies_data.append(bdata)
+                print("   [OK] {0} extracted successfully.".format(b_name))
+            except Exception as be:
+                print("   [SKIP] Error in body {0}: {1}".format(i, str(be)))
+                
+    except Exception as e:
+        print(" - [FATAL] Extraction Loop Failed: " + str(e))
             
-    print(" - Bodies Found: {0}".format(len(unique_bodies)))
-    final_data = []
-    for i, (body, matrix) in enumerate(unique_bodies):
-        try:
-            b_name = "Unknown"
-            try: b_name = body.Name
-            except: pass
-            vol = 0.0
-            try: vol = body.Shape.Volume * 1e9
-            except: pass
-            bdata = {"body_index": i, "body_name": b_name, "volume": vol, "faces": []}
-            for face in list(body.Faces): bdata["faces"].append(get_face_data(face, matrix))
-            final_data.append(bdata)
-            print("   [OK] {0}".format(b_name))
-        except: pass
-    return final_data, [], "mm"
+    return final_bodies_data, [], "mm"
 
 try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Adaptive extraction completed.")
+    print("\n[FINISH] Extraction complete using Occurrence Transforms.")
 except Exception as e: print("\n[FATAL] " + str(e))
