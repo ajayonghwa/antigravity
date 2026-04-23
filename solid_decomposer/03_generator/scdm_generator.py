@@ -22,7 +22,15 @@ class SCDMGenerator:
                 call = f"apply_ogrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
                 execution_calls += call
                 print(f"   -> Added O-GRID split for {body}")
-            elif strat in ["AXIAL", "SECTOR", "HGRID"]:
+            elif strat == "CGRID":
+                call = f"apply_cgrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan['wall_direction']}, {i})\n"
+                execution_calls += call
+                print(f"   -> Added C-GRID split for {body}")
+            elif strat == "RADIAL_OFFSET":
+                call = f"apply_radial_offset('{body}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i})\n"
+                execution_calls += call
+                print(f"   -> Added RADIAL_OFFSET split for {body}")
+            elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan["split_plane"]
                 call = f"apply_split_plane('{body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
                 execution_calls += call
@@ -36,7 +44,7 @@ import clr
 import System
 import math
 
-# [강화] 스페이스클레임 API 로드 (여러 버전 대응)
+# 스페이스클레임 API 로드
 def initialize_api():
     for v in range(22, 16, -1):
         try:
@@ -53,19 +61,85 @@ initialize_api()
 
 ALL_CUTTERS = []
 
-def get_matching_bodies(target_full_name):
-    parts = target_full_name.split("/")
-    target_base = parts[-1]
-    
+def make_all_bodies_independent():
+    '''패턴/인스턴스로 공유된 바디를 모두 독립화 (3.1 추가)'''
+    try:
+        root = GetRootPart()
+        components = root.Components
+        if components and components.Count > 0:
+            for comp in components:
+                try:
+                    comp_bodies = comp.Content.Bodies if comp.Content else []
+                    for body in comp_bodies:
+                        try:
+                            # 바디 복사 후 원본 삭제 방식의 독립화
+                            shape_copy = body.Shape.Copy()
+                            new_body = DesignBody.Create(root, body.Name + "_indep", shape_copy)
+                            body.Delete()
+                        except: pass
+                except: continue
+    except Exception as e:
+        print("Pattern independence failed: " + str(e))
+
+def get_matching_bodies(target_base):
+    '''이름 기반 3단계 매칭 (Fragment 추적 포함)'''
     all_bodies = GetRootPart().GetAllBodies()
     matched = []
     for body in all_bodies:
         b_name = body.Name
-        # [강화] 원래 이름으로 시작하는 모든 바디를 조각으로 간주하여 수집
-        # (예: Body, Body_1, Body (1), Body_CORE 등을 모두 포함)
-        if b_name.startswith(target_base):
+        if b_name == target_base or b_name.startswith(target_base + " "):
             matched.append(body)
+            continue
+        # Attribute 매칭 (필요시 활성화)
+        # try:
+        #     val = clr.Reference[System.String]()
+        #     if body.TryGetTextAttribute("AutoDecomp.UniqueID", val):
+        #         if val.Value == target_base or val.Value.startswith(target_base):
+        #             matched.append(body)
+        # except: pass
     return matched
+
+def _create_cylindrical_cutter(origin_pt, direction, radius, is_half=False, wall_dir=None):
+    '''동적 스케일링이 적용된 원통형 커터 생성'''
+    try:
+        bbox = GetRootPart().Range
+        # 모델 전체 길이를 기반으로 충분히 긴 커터 생성
+        diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
+        extrude_dist = max(diag * 1.5, 0.1)
+    except:
+        extrude_dist = 5.0
+        
+    shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
+                                  origin_pt.Y - direction.Y * extrude_dist/2, 
+                                  origin_pt.Z - direction.Z * extrude_dist/2)
+    
+    frame = Frame.Create(shifted_origin, direction)
+    circle = Circle.Create(frame, radius)
+    design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle))
+    
+    tool_body = None
+    try:
+        bodies_before = list(GetRootPart().GetAllBodies())
+        sel = Selection.Create(design_curve)
+        
+        try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+        except: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+        
+        bodies_after = list(GetRootPart().GetAllBodies())
+        new_bodies = [b for b in bodies_after if b not in bodies_before]
+        if new_bodies:
+            tool_body = new_bodies[0]
+    except Exception as e:
+        print("Extrude error: " + str(e))
+        
+    design_curve.Delete()
+    
+    if tool_body and is_half and wall_dir:
+        # C-Grid용 반원통 만들기 로직 (평면으로 절반 자르기)
+        # 구현은 생략하고 원통을 그대로 사용하되 향후 고도화 가능
+        pass
+        
+    return tool_body
 
 def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
     origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
@@ -73,76 +147,49 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
     
     targets = get_matching_bodies(target_full_name)
     for i, target_body in enumerate(targets):
-        try:
-            # 1. 원통형 커터 생성을 위한 돌출(Extrude) 로직
-            extrude_dist = 0.5 
-            shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
-                                          origin_pt.Y - direction.Y * extrude_dist/2, 
-                                          origin_pt.Z - direction.Z * extrude_dist/2)
-            
-            circle = Circle.Create(Frame.Create(shifted_origin, direction), core_offset)
-            design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle))
-            
-            tool_body = None
-            try:
-                # [무적 로직] 실행 전 바디 목록 기록
-                bodies_before = list(GetRootPart().GetAllBodies())
-                sel = Selection.Create(design_curve)
-                
-                try:
-                    # 4개 인자 방식 시도
-                    ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
-                except:
-                    # 5개 인자 방식 시도
-                    ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
-                
-                # 실행 후 새로 생긴 바디 찾기
-                bodies_after = list(GetRootPart().GetAllBodies())
-                new_bodies = [b for b in bodies_after if b not in bodies_before]
-                if new_bodies:
-                    tool_body = new_bodies[0]
-                
-            except Exception as e:
-                print("Extrude error: " + str(e))
-                # [최종 보루] Pull 도구 시도
-                try:
-                    bodies_before = list(GetRootPart().GetAllBodies())
-                    Pull.Execute(Selection.Create(design_curve), direction, extrude_dist, PullOptions(), None)
-                    bodies_after = list(GetRootPart().GetAllBodies())
-                    new_bodies = [b for b in bodies_after if b not in bodies_before]
-                    if new_bodies: tool_body = new_bodies[0]
-                except: pass
-            
-            if tool_body:
-                tool_body.Name = "Cutter_OGrid_Cyl_" + str(idx) + "_" + str(i)
-                ALL_CUTTERS.append(tool_body)
-                try:
-                    # [최종 확인된 형식] 4개 인자 호출
-                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
-                except: pass
-            
-            design_curve.Delete()
-        except Exception as e:
-            print("O-grid error: " + str(e))
+        tool_body = _create_cylindrical_cutter(origin_pt, direction, core_offset)
+        if tool_body:
+            tool_body.Name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
+            ALL_CUTTERS.append(tool_body)
+            try: SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
+            except: pass
+
+def apply_radial_offset(target_full_name, center_list, axis_list, split_radius, idx):
+    origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
+    direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
+    
+    targets = get_matching_bodies(target_full_name)
+    for i, target_body in enumerate(targets):
+        tool_body = _create_cylindrical_cutter(origin_pt, direction, split_radius)
+        if tool_body:
+            tool_body.Name = "Cutter_Radial_" + str(idx) + "_" + str(i)
+            ALL_CUTTERS.append(tool_body)
+            try: SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
+            except: pass
+
+def apply_cgrid(target_full_name, center_list, axis_list, core_offset, wall_dir, idx):
+    # C-Grid는 현재 O-Grid와 동일하게 처리하나, 향후 반원으로 개선
+    apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx)
 
 def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     frame = Frame.Create(origin, normal)
     
-    # [최종 전략] 원을 그린 뒤 내부를 채워(Fill) 평면 서피스 커터 생성
     try:
-        # 1. 넉넉한 크기의 원(반지름 5m) 생성 (모든 조각을 다 덮도록)
-        huge_radius = 5.0 
+        try:
+            bbox = GetRootPart().Range
+            diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
+            huge_radius = max(diag * 1.5, 0.1)
+        except:
+            huge_radius = 5.0
+            
         circle_geom = Circle.Create(frame, huge_radius)
         design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom))
         
-        # 2. Fill 명령어로 원 내부를 채워 서피스 바디 생성
         bodies_before = list(GetRootPart().GetAllBodies())
-        try:
-            Fill.Execute(Selection.Create(design_curve), None)
-        except:
-            Fill.Execute(Selection.Create(design_curve))
+        try: Fill.Execute(Selection.Create(design_curve), None)
+        except: Fill.Execute(Selection.Create(design_curve))
             
         bodies_after = list(GetRootPart().GetAllBodies())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
@@ -152,11 +199,9 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
             tool_body.Name = "Cutter_Surface_" + strategy + "_" + str(idx)
             ALL_CUTTERS.append(tool_body)
             
-            # 3. 분할 실행 (4인자 방식)
             targets = get_matching_bodies(target_full_name)
             for target in targets:
-                try:
-                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_body.Faces[0]), True, None)
+                try: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_body.Faces[0]), True, None)
                 except: pass
         
         design_curve.Delete()
@@ -166,15 +211,14 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
 def finalize():
     if ALL_CUTTERS:
         try:
-            # 커터들 정리 및 공유 토폴로지 적용
             for cutter in ALL_CUTTERS:
                 try: cutter.Delete()
                 except: pass
-            # 최종 바디들 간의 연결성 확보
             PartSharedTopology.Share(GetRootPart(), None)
         except: pass
 
 # --- Execution ---
+make_all_bodies_independent()
 {execution_calls}
 finalize()
 """

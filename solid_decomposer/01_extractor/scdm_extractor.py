@@ -99,22 +99,75 @@ def extract_geometry():
             
     print("Found {0} bodies.".format(bodies.Count))
 
+    # [추가] 중복 이름 감지
+    name_count = {}
+    for body in bodies:
+        try:
+            name = getattr(body, 'Name', 'Unknown')
+            name_count[name] = name_count.get(name, 0) + 1
+        except: pass
+    
+    duplicates = {k: v for k, v in name_count.items() if v > 1}
+    warnings = []
+    if duplicates:
+        print("WARNING: Duplicate body names detected:")
+        for name, count in duplicates.items():
+            print("  - '{0}' x {1}".format(name, count))
+            warnings.append("Duplicate name '{0}' found {1} times.".format(name, count))
+
     for i, body in enumerate(bodies):
         try:
-            body_name = "Body_" + str(i)
+            # [핵심] 원래의 전체 경로 이름을 보관 (슬래시 통일)
+            original_full_name = "Unknown"
             fn = getattr(body, 'GetFullName', None)
-            if fn: body_name = fn()
-            elif hasattr(body, 'Name'): body_name = body.Name
-            
+            if fn: 
+                original_full_name = fn().replace("\\", "/")
+            elif hasattr(body, 'Name'): 
+                original_full_name = body.Name
+
+            # [핵심] 바디 이름을 고유한 ID로 변경하여 충돌 방지 (3단계 방어 체계)
+            unique_name = "AUTO_BODY_" + str(i)
+            id_method = "rename"
+            try:
+                body.Name = unique_name
+                print(" - Renamed: {0} -> {1}".format(original_full_name, unique_name))
+            except Exception as e:
+                # 2단계: Attribute 백업
+                id_method = "attribute"
+                try:
+                    body.SetTextAttribute("AutoDecomp.UniqueID", unique_name)
+                    print(" - Rename failed, used Attribute for {0}".format(original_full_name))
+                except:
+                    # 3단계: Fingerprint
+                    id_method = "fingerprint"
+                    print(" - Attribute failed, using Fingerprint for {0}".format(original_full_name))
+
             volume = getattr(body, 'Volume', 0)
             if hasattr(body, 'Shape'): volume = getattr(body.Shape, 'Volume', volume)
 
+            # Fingerprint calculation if needed
+            fingerprint = ""
+            if id_method == "fingerprint":
+                try:
+                    r = getattr(body.Shape, 'Range', getattr(body, 'Box', getattr(body, 'BoundingBox', None)))
+                    if r:
+                        cx = (r.Min.X + r.Max.X) / 2.0
+                        cy = (r.Min.Y + r.Max.Y) / 2.0
+                        cz = (r.Min.Z + r.Max.Z) / 2.0
+                        fingerprint = "HASH_{0:.6f}_{1:.6f}_{2:.6f}_{3:.6f}".format(volume, cx, cy, cz)
+                        unique_name = fingerprint
+                except: pass
+
             body_data = {
                 "body_index": i,
-                "body_name": body_name,
+                "body_name": unique_name,
+                "original_name": original_full_name,
+                "id_method": id_method,
+                "fingerprint": fingerprint,
                 "volume": volume,
                 "faces": [],
-                "adjacency": [] # Planner에서 필요할 수 있음
+                "adjacency": [],
+                "identified_holes": []
             }
             
             # 면 정보 추출
@@ -137,21 +190,44 @@ def extract_geometry():
                         if idx1 is not None and idx2 is not None:
                             body_data["adjacency"].append([idx1, idx2])
             except: pass
+            
+            # [추가] IdentifyHoles API를 통한 물리적 홀 식별
+            try:
+                # 스페이스클레임 API 로드가 되어있다고 가정
+                from SpaceClaim.Api.V22.Modeler import IdentifyHoleOptions
+                options = IdentifyHoleOptions()
+                holes = body.IdentifyHoles(options)
+                for hole in holes:
+                    hole_data = {
+                        "type": "Through" if getattr(hole, 'Through', True) else "Blind",
+                        "diameter": getattr(hole, 'DrillSize', 0.0),
+                        "depth": getattr(hole, 'Depth', 0.0),
+                        "has_counterbore": getattr(hole, 'Counterbore', None) is not None,
+                        "has_countersink": getattr(hole, 'Countersink', None) is not None
+                    }
+                    try:
+                        axis = hole.Axis
+                        hole_data["axis"] = [axis.Direction.X, axis.Direction.Y, axis.Direction.Z]
+                        hole_data["origin"] = [axis.Origin.X, axis.Origin.Y, axis.Origin.Z]
+                    except: pass
+                    body_data["identified_holes"].append(hole_data)
+            except: pass
                     
             all_bodies_data.append(body_data)
-            print(" - Processed: {0}".format(body_name))
+            print(" - Processed: {0}".format(unique_name))
         except: continue
         
-    return all_bodies_data
+    return all_bodies_data, warnings
 
 # 메인 실행부
 try:
-    results = extract_geometry()
+    results, warnings = extract_geometry()
     
     # 파이프라인 호환용 래핑 구조
     final_data = {
         "sub_device_name": "DEVICE",
         "units": "m",
+        "warnings": warnings,
         "bodies": results
     }
     

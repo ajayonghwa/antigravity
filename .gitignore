@@ -25,3 +25,10 @@ legacy/
 
 # OS files
 .DS_Store
+
+# Physics Simulation project
+symbolic_physics_sim/
+
+# SCDM backup and reference docs
+stable_v1_backup/
+SpaceClaim.Api.V22.md
