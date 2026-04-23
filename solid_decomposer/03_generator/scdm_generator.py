@@ -15,9 +15,8 @@ class SCDMGenerator:
             strat = plan.get("strategy", "").upper()
             body = plan.get("body_name", "Unknown")
             
-            # [v4.16] IronPython 2.7에서 한글 문자열 비교를 위해 반드시 u"..." 접두사를 사용해야 함
-            # r"..." 을 사용하면 바이트 스트링(utf-8 byte array)으로 해석되어 .NET String과 일치하지 않음
-            safe_body = body.replace("'", "\\'") # 작은따옴표 이스케이프
+            # [v4.16] u"..." 유니코드 접두사 유지
+            safe_body = body.replace("'", "\\'")
             
             if strat == "OGRID":
                 execution_calls += f"apply_ogrid(u'{safe_body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
@@ -29,6 +28,8 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += f"apply_split_plane(u'{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
+        # [v4.17] 스페이스클레임 스크립트 에디터 환경에 맞는 와일드카드 임포트 복구
+        # 불완전한 전역 변수 할당(SC_Point 등)으로 인한 초기화 실패를 방지
         script_template = f"""# -*- coding: utf-8 -*-
 import clr
 import System
@@ -37,20 +38,10 @@ import math
 def initialize_api():
     try:
         clr.AddReference("SpaceClaim.Api.V22")
-        import SpaceClaim.Api.V22 as scapi
-        global SC_Point, SC_Direction, SC_Frame, SC_Circle, SC_DesignCurve, SC_CurveSegment, SC_Selection, SC_SplitBody, SC_Component, SC_Fill, SC_ExtrudeEdges, SC_ExtrudeEdgeOptions
-        SC_Point = scapi.Point
-        SC_Direction = scapi.Direction
-        SC_Frame = scapi.Frame
-        SC_Circle = scapi.Circle
-        SC_DesignCurve = scapi.DesignCurve
-        SC_CurveSegment = scapi.CurveSegment
-        SC_Selection = scapi.Selection
-        SC_SplitBody = scapi.SplitBody
-        SC_Component = scapi.Component
-        SC_Fill = scapi.Fill
-        SC_ExtrudeEdges = scapi.Modeler.ExtrudeEdges
-        SC_ExtrudeEdgeOptions = scapi.Modeler.ExtrudeEdgeOptions
+        from SpaceClaim.Api.V22 import *
+        from SpaceClaim.Api.V22.Modeler import *
+        try: from SpaceClaim.Api.V22.Commands import *
+        except: pass
         return True
     except: return False
 
@@ -68,7 +59,6 @@ def get_matching_bodies(target_name):
     get_all_bodies_recursive(GetRootPart(), all_bodies)
     matched = []
     for b in all_bodies:
-        # target_name은 이제 unicode 객체이므로 .NET String인 b.Name과 완벽히 일치함
         if b.Name == target_name or b.Name.startswith(target_name + u"_"):
             matched.append(b)
     return matched
@@ -80,20 +70,19 @@ def _get_safe_range(obj):
 
 def _get_target_cutter_comp(target_body_name):
     root = GetRootPart()
-    # 컴포넌트 이름에 특수문자나 한글이 들어가면 문제가 생길 수 있으므로 안전한 이름 사용
     safe_name = "".join(c for c in target_body_name if c.isalnum() or c == u"_")
     comp_name = "CUTTERS_FOR_" + safe_name
     for comp in root.Components:
         if comp.Name == comp_name: return comp
-    return SC_Component.Create(root, comp_name)
+    return Component.Create(root, comp_name)
 
 def _safe_split(target_body, cutter_face):
     try:
-        res = SC_SplitBody.ByCutter(SC_Selection.Create(target_body), SC_Selection.Create(cutter_face), True, None)
+        res = SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(cutter_face), True, None)
         if res.CreatedBodies.Count > 0: return True
     except: pass
     try:
-        SC_SplitBody.Execute(SC_Selection.Create(target_body), SC_Selection.Create(cutter_face))
+        SplitBody.Execute(Selection.Create(target_body), Selection.Create(cutter_face))
         return True
     except: pass
     return False
@@ -107,20 +96,22 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
             diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
             extrude_dist = max(diag * 4.0, 0.1)
         
-        shifted_origin = SC_Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
-                                         origin_pt.Y - direction.Y * extrude_dist/2, 
-                                         origin_pt.Z - direction.Z * extrude_dist/2)
+        shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
+                                      origin_pt.Y - direction.Y * extrude_dist/2, 
+                                      origin_pt.Z - direction.Z * extrude_dist/2)
         
-        frame = SC_Frame.Create(shifted_origin, direction)
-        circle = SC_Circle.Create(frame, radius)
-        design_curve = SC_DesignCurve.Create(root, SC_CurveSegment.Create(circle))
+        frame = Frame.Create(shifted_origin, direction)
+        circle = Circle.Create(frame, radius)
+        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
         
         bodies_before = []
         get_all_bodies_recursive(root, bodies_before)
         
-        sel = SC_Selection.Create(design_curve)
-        try: SC_ExtrudeEdges.Execute(sel, extrude_dist, SC_ExtrudeEdgeOptions(), None)
-        except: SC_ExtrudeEdges.Execute(sel, SC_Selection.Create(direction), extrude_dist, SC_ExtrudeEdgeOptions(), None)
+        sel = Selection.Create(design_curve)
+        try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+        except: 
+            try: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+            except: pass
         
         bodies_after = []
         get_all_bodies_recursive(root, bodies_after)
@@ -137,11 +128,8 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
 
 def apply_ogrid(target_name, center, axis, offset, idx):
     global ALL_CUTTERS
-    # [v4.16] 복잡한 인코딩 해킹 제거, 그냥 유니코드로 출력 (IronPython이 알아서 처리)
-    try:
-        print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name))
-    except:
-        print(" -> Step {{0}}: O-GRID".format(idx))
+    try: print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name))
+    except: print(" -> Step {{0}}: O-GRID".format(idx))
         
     targets = get_matching_bodies(target_name)
     if not targets:
@@ -149,8 +137,8 @@ def apply_ogrid(target_name, center, axis, offset, idx):
         except: print("    [ERROR] Could not find target body")
         return
 
-    origin_pt = SC_Point.Create(center[0], center[1], center[2])
-    direction = SC_Direction.Create(axis[0], axis[1], axis[2])
+    origin_pt = Point.Create(center[0], center[1], center[2])
+    direction = Direction.Create(axis[0], axis[1], axis[2])
 
     for i, target in enumerate(targets):
         cutter_name = "Cutter_OGrid_Hole_{{0}}_{{1}}".format(idx, i)
@@ -181,9 +169,9 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
         except: print("    [ERROR] Could not find target body")
         return
     
-    origin = SC_Point.Create(origin_list[0], origin_list[1], origin_list[2])
-    normal = SC_Direction.Create(normal_list[0], normal_list[1], normal_list[2])
-    frame = SC_Frame.Create(origin, normal)
+    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
+    normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+    frame = Frame.Create(origin, normal)
     root = GetRootPart()
 
     for i, target in enumerate(targets):
@@ -193,12 +181,12 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
             if r:
                 huge_radius = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2) * 4.0
             
-            circle_geom = SC_Circle.Create(frame, huge_radius)
-            design_curve = SC_DesignCurve.Create(root, SC_CurveSegment.Create(circle_geom))
+            circle_geom = Circle.Create(frame, huge_radius)
+            design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
             
             bodies_before = []
             get_all_bodies_recursive(root, bodies_before)
-            SC_Fill.Execute(SC_Selection.Create(design_curve))
+            Fill.Execute(Selection.Create(design_curve))
             
             bodies_after = []
             get_all_bodies_recursive(root, bodies_after)
