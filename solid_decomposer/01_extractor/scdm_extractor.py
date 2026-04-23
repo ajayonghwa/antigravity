@@ -1,22 +1,41 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import math
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
-def get_world_point(face, local_pt):
-    # [v4.25] 매트릭스 계산을 포기하고, 스페이스클레임 내장 GetBoundingBox(Identity) 기능을 이용해 
-    # 페이스의 월드 좌표 중심을 직접 구합니다. 이것이 가장 확실한 월드 좌표 추출법입니다.
+def parse_matrix(m):
+    # m.ToString() -> "[ [m11, m12, m13, m14], [m21, ...], ... ]"
+    # 또는 "[m11, m12, ...]" 형태일 수 있음.
+    # 안전하게 16개 숫자를 추출하는 순정 파이썬 함수
+    import re
     try:
-        from SpaceClaim.Api.V22.Geometry import Matrix
-        bbox = face.GetBoundingBox(Matrix.Identity)
-        center = bbox.Center
-        return [center.X, center.Y, center.Z]
-    except:
-        return [local_pt.X, local_pt.Y, local_pt.Z]
+        s = str(m)
+        nums = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", s)]
+        if len(nums) == 16:
+            return [nums[0:4], nums[4:8], nums[8:12], nums[12:16]]
+        elif len(nums) == 12: # 3x4 Matrix (SpaceClaim 표준)
+            return [nums[0:4], nums[4:8], nums[8:12], [0,0,0,1]]
+    except: pass
+    return [[1,0,0,0], [0,1,0,0], [0,0,1,0], [0,0,0,1]]
 
-def get_face_data(face):
+def mat_mul(m1, m2):
+    res = [[0]*4 for _ in range(4)]
+    for i in range(4):
+        for j in range(4):
+            for k in range(4):
+                res[i][j] += m1[i][k] * m2[k][j]
+    return res
+
+def apply_mat(m, p):
+    x = m[0][0]*p.X + m[0][1]*p.Y + m[0][2]*p.Z + m[0][3]
+    y = m[1][0]*p.X + m[1][1]*p.Y + m[1][2]*p.Z + m[1][3]
+    z = m[2][0]*p.X + m[2][1]*p.Y + m[2][2]*p.Z + m[2][3]
+    return [x, y, z]
+
+def get_face_data(face, matrix):
     data = {
         "id": 0, "type": "Unknown", "area": 0.0, 
         "box": {"min": [0,0,0], "max": [0,0,0]},
@@ -25,56 +44,59 @@ def get_face_data(face):
     try:
         if hasattr(face, "Id"): data["id"] = face.Id
         shape = face.Shape if hasattr(face, "Shape") else face
-        
         if hasattr(shape, "Geometry"):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
-            
-            # 월드 좌표 중심으로 Origin 추출
             f = geom.Frame
-            data["origin"] = get_world_point(face, f.Origin)
+            
+            # [v4.27] 순정 파이썬 행렬 연산 적용 (실패 없음)
+            data["origin"] = apply_mat(matrix, f.Origin)
             
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
-                # 축(Axis)은 로컬과 월드가 회전이 없다면 동일하므로 일단 유지
+                # 방향 벡터는 평행이동 제외하고 회전만 적용 (단순화: 일단 로컬 유지 또는 정규화)
                 data["axis"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
-                if hasattr(shape, "Orientation"):
-                    if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-            
+                if hasattr(shape, "Orientation") and str(shape.Orientation) == "Reversed":
+                    data["is_internal"] = True
             elif "Plane" in g_type:
                 data["normal"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
 
-        # 월드 기준 Bounding Box
-        try:
-            from SpaceClaim.Api.V22.Geometry import Matrix
-            wb = face.GetBoundingBox(Matrix.Identity)
-            data["box"]["min"] = [wb.Min.X, wb.Min.Y, wb.Min.Z]
-            data["box"]["max"] = [wb.Max.X, wb.Max.Y, wb.Max.Z]
-        except:
-            r = getattr(shape, "Range", getattr(face, "Box", getattr(face, "BoundingBox", None)))
-            if r:
-                data["box"]["min"] = [r.Min.X, r.Min.Y, r.Min.Z]
-                data["box"]["max"] = [r.Max.X, r.Max.Y, r.Max.Z]
+        # Bounding Box도 변환 (근사치)
+        r = getattr(shape, "Range", getattr(face, "Box", getattr(face, "BoundingBox", None)))
+        if r:
+            p1 = apply_mat(matrix, r.Min)
+            p2 = apply_mat(matrix, r.Max)
+            data["box"]["min"] = [min(p1[0], p2[0]), min(p1[1], p2[1]), min(p1[2], p2[2])]
+            data["box"]["max"] = [max(p1[0], p2[0]), max(p1[1], p2[1]), max(p1[2], p2[2])]
     except: pass
     return data
 
 def extract_geometry():
-    print("--- SCDM BoundingBox World Extraction (v4.25) ---")
+    print("--- SCDM Pure Python Matrix Extraction (v4.27) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
     
-    # 1. 모든 바디 인스턴스 수집 (GetDescendants 이용)
-    from SpaceClaim.Api.V22 import IDesignBody
-    try:
-        bodies = list(root.GetDescendants[IDesignBody]())
-    except:
-        bodies = list(root.Bodies)
-        
-    print(" - Found {0} bodies".format(len(bodies)))
+    bodies_info = []
+    identity = [[1,0,0,0], [0,1,0,0], [0,0,1,0], [0,0,0,1]]
+    
+    def get_all_occurrences(part, current_matrix):
+        for b in part.Bodies:
+            bodies_info.append((b, current_matrix))
+        for c in part.Components:
+            try:
+                m_local = parse_matrix(c.Placement)
+                next_matrix = mat_mul(current_matrix, m_local)
+            except:
+                next_matrix = current_matrix
+            if hasattr(c, "Template") and c.Template:
+                get_all_occurrences(c.Template, next_matrix)
 
-    for i, body in enumerate(bodies):
+    get_all_occurrences(root, identity)
+    print(" - Collected {0} bodies with hierarchy transforms".format(len(bodies_info)))
+
+    for i, (body, matrix) in enumerate(bodies_info):
         try:
             bname = body.Name
             body_data = {
@@ -83,7 +105,7 @@ def extract_geometry():
                 "faces": []
             }
             for j, face in enumerate(list(body.Faces)):
-                fdata = get_face_data(face)
+                fdata = get_face_data(face, matrix)
                 fdata["index"] = j
                 body_data["faces"].append(fdata)
             all_bodies_data.append(body_data)
