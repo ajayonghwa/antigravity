@@ -11,10 +11,22 @@ class SCDMGenerator:
             except: self.output_dir = project_root
 
     def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
+        # 바디별 고유 컴포넌트 목록 수집
+        unique_body_indices = sorted(list(set([p.get("body_index", 0) for p in plan_list])))
+        body_index_to_name = {{}}
+        for p in plan_list:
+             body_index_to_name[p.get("body_index", 0)] = p.get("body_name", "Unknown")
+
+        comp_creation_calls = ""
+        for b_idx in unique_body_indices:
+            bname = body_index_to_name[b_idx]
+            bname_b64 = base64.b64encode(bname.encode('utf-8')).decode('ascii')
+            comp_creation_calls += f"create_body_component('{bname_b64}', {b_idx})\n"
+
         execution_calls = ""
         for i, plan in enumerate(plan_list):
             strat = plan.get("strategy", "").upper()
-            body_idx = plan.get("body_index", i)
+            body_idx = plan.get("body_index", 0)
             body = plan.get("body_name", "Unknown")
             body_b64 = base64.b64encode(body.encode('utf-8')).decode('ascii')
             
@@ -33,6 +45,7 @@ import math
 import base64
 
 ALL_CUTTERS = []
+BODY_COMP_MAP = {{}}
 
 def get_all_bodies_recursive(part, body_list):
     try:
@@ -55,11 +68,12 @@ def get_matching_bodies(body_b64):
             matched.append(b)
     return matched
 
-def _move_body_to_comp(body, target_body_name, body_idx):
-    # [v4.27] 바디별 고유 컴포넌트 생성 및 Copy/Delete 방식으로 이동 보장
+def create_body_component(name_b64, body_idx):
+    # [v4.28] 자르기 전 컴포넌트 선행 생성
+    global BODY_COMP_MAP
     root = GetRootPart()
-    try: t_name = target_body_name.decode('utf-8')
-    except: t_name = target_body_name
+    try: t_name = base64.b64decode(name_b64).decode('utf-8')
+    except: t_name = name_b64
     safe_name = "".join(c for c in t_name if c.isalnum() or c == u"_")
     comp_name = "CUTTERS_FOR_{{0}}_{{1}}".format(safe_name, body_idx)
     
@@ -68,15 +82,18 @@ def _move_body_to_comp(body, target_body_name, body_idx):
         if comp.Name == comp_name:
             target_part = comp.Template
             break
-            
     if not target_part:
         try:
             target_part = Part.Create(root.Document, comp_name)
             Component.Create(root, target_part)
         except: target_part = root
-        
+    BODY_COMP_MAP[body_idx] = target_part
+    print(" - Created component for {{0}}".format(t_name))
+
+def _move_body_to_comp(body, body_idx):
+    global BODY_COMP_MAP
+    target_part = BODY_COMP_MAP.get(body_idx, GetRootPart())
     try:
-        # 스페이스클레임에서 바디 이동은 Copy(Part) -> Delete()가 가장 확실합니다.
         body.Copy(target_part)
         body.Delete()
         return True
@@ -84,13 +101,21 @@ def _move_body_to_comp(body, target_body_name, body_idx):
 
 def _safe_split_multi(targets, cutter_face):
     if not targets: return False
+    # [v4.28] 타겟 바디 리스트 정화 (유효한 것만)
+    valid_targets = []
+    for t in targets:
+        try:
+            if t.Shape: valid_targets.append(t)
+        except: pass
+    if not valid_targets: return False
+    
     try:
-        sel = Selection.Create(targets)
+        sel = Selection.Create(valid_targets)
         res = SplitBody.ByCutter(sel, Selection.Create(cutter_face), True, None)
         if res.CreatedBodies.Count > 0: return True
     except: pass
     try:
-        SplitBody.Execute(Selection.Create(targets), Selection.Create(cutter_face))
+        SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face))
         return True
     except: pass
     return False
@@ -110,7 +135,7 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         diag = 2.0
         r = getattr(targets[0].Shape, "Range", getattr(targets[0], "Box", getattr(targets[0], "BoundingBox", None)))
         if r: diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
-        extrude_dist = max(diag * 10.0, 0.5)
+        extrude_dist = max(diag * 10.0, 1.0)
         
         shifted_origin = Point.Create(origin_pt.X - axis[0] * extrude_dist/2, 
                                       origin_pt.Y - axis[1] * extrude_dist/2, 
@@ -118,11 +143,8 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         frame = Frame.Create(shifted_origin, direction)
         circle = Circle.Create(frame, offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        
         try: ExtrudeEdges.Execute(Selection.Create(design_curve), extrude_dist, ExtrudeEdgeOptions(), None)
-        except: 
-            try: ExtrudeEdges.Execute(Selection.Create(design_curve), Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
-            except: pass
+        except: pass
         
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
@@ -136,7 +158,7 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
                     break
             if _safe_split_multi(targets, cutter_face): print("    [OK] Multi-Split Success")
             else: print("    [FAIL] Multi-Split failed")
-            _move_body_to_comp(tool, tname, b_idx)
+            _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
     except Exception as e: print("    [ERROR] " + str(e))
 
@@ -153,7 +175,7 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
 
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        huge_radius = 10.0
+        huge_radius = 20.0
         circle_geom = Circle.Create(frame, huge_radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
         Fill.Execute(Selection.Create(design_curve))
@@ -165,12 +187,15 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             tool.Name = "Cutter_{{0}}_{{1}}".format(strategy, idx)
             if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Multi-Split Success")
             else: print("    [FAIL] Multi-Split failed")
-            _move_body_to_comp(tool, tname, b_idx)
+            _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
     except Exception as e: print("    [ERROR] " + str(e))
 
 def finalize():
     print(" --- Finished ---")
+
+# --- INITIALIZATION ---
+{comp_creation_calls}
 
 # --- EXECUTION ---
 {execution_calls}
