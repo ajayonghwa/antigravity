@@ -40,11 +40,15 @@ def run_master_pipeline():
         print("Error: Extractor script not found at " + EXTRACTOR_PATH)
         return
     try:
-        # Extractor 스크립트를 현재 공간에서 실행 (OUTPUT_PATH가 파일 내에 설정되어 있어야 함)
-        # 팁: scdm_extractor.py 내부의 OUTPUT_PATH를 PROJECT_ROOT/data/geometry.json 으로 맞춰주세요.
+        # 데이터 저장 경로 강제 지정
+        DATA_PATH = os.path.join(PROJECT_ROOT, "data", "geometry_data.json")
+        
+        # Extractor 스크립트를 읽어서 실행하되, OUTPUT_PATH를 현재 컨텍스트에서 오버라이드
         with open(EXTRACTOR_PATH, 'r') as f:
-            exec(f.read())
-        print(" -> Extraction Completed.")
+            # globals()를 넘겨서 SpaceClaim API 함수들에 접근 가능하게 함
+            # 로컬 변수로 OUTPUT_PATH를 주입
+            exec(f.read(), globals(), {'OUTPUT_PATH': DATA_PATH})
+        print(" -> Extraction Completed: " + DATA_PATH)
     except Exception as e:
         print(" -> Extraction Failed: " + str(e))
         return
@@ -55,7 +59,10 @@ def run_master_pipeline():
         # CPython 실행을 위한 프로세스 설정
         start_info = ProcessStartInfo()
         start_info.FileName = PYTHON_EXE
-        start_info.Arguments = '"' + MAIN_RUN_PATH + '"'
+        # 인자 전달: [main_run.py 경로] [기기이름] [JSON파일명]
+        # JSON 경로는 파일명만 전달 (ExtractManager가 data/ 폴더에서 찾음)
+        input_json_name = os.path.basename(DATA_PATH)
+        start_info.Arguments = '"{0}" DEVICE {1}'.format(MAIN_RUN_PATH, input_json_name)
         start_info.WorkingDirectory = PROJECT_ROOT
         start_info.UseShellExecute = False
         start_info.CreateNoWindow = True # 검은색 CMD 창 숨기기

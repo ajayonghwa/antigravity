@@ -51,8 +51,8 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
     # 3. SCDM 실행 스크립트 생성 (03_generator)
     generator = SCDMGenerator(project_root)
     
-    # 기기 이름이 들어간 유니크한 파일명 생성
-    output_filename = f"{sub_device_name}_scdm_script.py"
+    # [수정] 원클릭 마스터 스크립트와 이름을 맞추기 위해 고정된 파일명을 사용합니다.
+    output_filename = "scdm_decomposition_script.py"
     
     # 04_scripts 폴더 생성 확인
     if not os.path.exists(script_dir):
