@@ -75,22 +75,19 @@ def create_body_component(name_b64, body_idx):
         try:
             target_part = Part.Create(root.Document, comp_name)
             target_comp = Component.Create(root, target_part)
-            print(" - [DEBUG] Created component: {{0}}".format(comp_name))
-        except Exception as e: print(" - [ERROR] Comp Creation Failed: {{0}}".format(str(e)))
+        except: target_comp = None
     BODY_COMP_MAP[body_idx] = target_comp
 
 def _move_body_to_comp(body, body_idx):
     global BODY_COMP_MAP
     target_comp = BODY_COMP_MAP.get(body_idx)
-    if not target_comp:
-        print(" - [DEBUG] target_comp is None for body_idx {{0}}".format(body_idx))
-        return False
+    if not target_comp: return False
     try:
-        # [v4.40] RenameInstance와 유사한 표준 명령어 방식 (MoveToComponent.Execute)
-        MoveToComponent.Execute(Selection.Create(body), target_comp)
+        # [v4.41] ComponentHelper.MoveBodiesToComponent API 사용 (가장 안정적인 방식)
+        from SpaceClaim.Api.V22.Modeler import ComponentHelper
+        ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
         return True
-    except Exception as e:
-        print(" - [DEBUG] MoveToComponent failed: {{0}}".format(str(e)))
+    except:
         try: body.SetParent(target_comp); return True
         except: return False
 
@@ -115,12 +112,11 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        ExtrudeEdges.Execute(Selection.Create(design_curve), 10.0, ExtrudeEdgeOptions(), None)
+        ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
-            tool.Name = "Cutter_OGrid_{{0}}".format(idx)
             if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split")
             _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
@@ -143,7 +139,6 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
-            tool.Name = "Cutter_{{0}}_{{1}}".format(strategy, idx)
             if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split")
             _move_body_to_comp(tool, b_idx)
         design_curve.Delete()

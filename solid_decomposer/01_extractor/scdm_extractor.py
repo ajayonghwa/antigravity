@@ -30,7 +30,8 @@ def apply_mat(m, p):
     return [x, y, z]
 
 def get_face_data(face, matrix):
-    f_id = getattr(face, "Id", 0)
+    # [v4.41] .Id 대신 모든 객체에 존재하는 .GetHashCode()를 사용하여 플래너의 혼선 방지
+    f_id = face.GetHashCode()
     data = {"id": f_id, "type": "Unknown", "area": 0.0, "box": {"min": [0,0,0], "max": [0,0,0]}, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
     try:
         shape = face.Shape
@@ -57,7 +58,7 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Resilient Extraction (v4.38) ---")
+    print("--- SCDM HashID Extraction (v4.41) ---")
     all_bodies_data = []
     root = GetRootPart()
     try: bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
@@ -74,13 +75,10 @@ def extract_geometry():
         
         original_name = body.Name
         unique_name = "AUTO_BODY_" + str(i)
-        
-        # [v4.38] 이름 변경 실패가 전체를 중단시키지 않도록 보호
         try:
-            try: RenameInstance.Execute(Selection.Create(body), unique_name)
-            except: body.Name = unique_name
-        except Exception as e:
-            print(" - [WARNING] Could not rename {0}: {1}".format(original_name, str(e)))
+            # [v4.41] RenameInstance 대신 직접 대입을 우선 시도 (예외 처리 포함)
+            body.Name = unique_name
+        except: pass
         
         actual_name = body.Name
         print(" - [OK] {0} (Pos: {1:.4f}, {2:.4f}, {3:.4f})".format(actual_name, matrix_py[0][3], matrix_py[1][3], matrix_py[2][3]))
