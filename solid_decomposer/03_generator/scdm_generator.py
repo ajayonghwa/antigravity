@@ -45,12 +45,7 @@ class SCDMGenerator:
         script_template = """# -*- coding: utf-8 -*-
 import clr
 import System
-import math
-import base64
-import json as pyjson
-import re
-
-# [v6.0] stable_v1_backup의 무적 API 초기화 로직
+# [v6.3] stable_v1_backup과 100% 동일한 임포트 구조로 원복
 def initialize_api():
     for v in range(22, 16, -1):
         try:
@@ -59,8 +54,6 @@ def initialize_api():
             exec("from SpaceClaim.Api.V" + str(v) + " import *", globals())
             exec("from SpaceClaim.Api.V" + str(v) + ".Modeler import *", globals())
             exec("from SpaceClaim.Api.V" + str(v) + ".Commands import *", globals())
-            exec("from SpaceClaim.Api.V" + str(v) + ".Geometry import *", globals())
-            exec("from SpaceClaim.Api.V" + str(v) + ".Scripting import *", globals())
             return True
         except: pass
     return False
@@ -74,10 +67,8 @@ def get_matching_bodies(body_b64):
     try: t_clean = base64.b64decode(body_b64).decode('utf-8').lower().strip()
     except: t_clean = body_b64.lower().strip()
     try:
-        doc = Window.ActiveWindow.Document
-        root = doc.MainPart
-        all_b = root.GetDescendants[IDesignBody]()
-        # 백업본의 유연한 이름 매칭 로직 이식
+        # 백업본 방식: GetRootPart() 사용
+        all_b = GetRootPart().GetAllBodies()
         target_base = t_clean.split("/")[-1]
         matches = [b for b in all_b if b.Name.lower().startswith(target_base)]
         return matches
@@ -85,12 +76,11 @@ def get_matching_bodies(body_b64):
 
 def _init_comp(name_b64, body_idx):
     try:
-        doc = Window.ActiveWindow.Document
-        root = doc.MainPart
+        root = GetRootPart()
         comp_name = "CUTTERS_{0}".format(body_idx)
         target_comp = next((c for c in root.Components if c.Name == comp_name), None)
         if not target_comp:
-            target_part = Part.Create(doc, comp_name)
+            target_part = Part.Create(root.Document, comp_name)
             target_comp = Component.Create(root, target_part)
         BODY_COMP_MAP[body_idx] = target_comp
     except: pass
@@ -99,7 +89,8 @@ def _move_to_comp(obj, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return
     try:
-        sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(obj)
+        # 백업본의 Selection.Create 사용
+        sel = Selection.Create(obj)
         ComponentHelper.MoveBodiesToComponent(sel, target_comp)
     except: pass
 
@@ -111,47 +102,54 @@ def apply_ogrid(body_b64, center_list, axis_list, core_offset, idx, b_idx):
     for target_body in targets:
         try:
             print("   [DEBUG] O-Grid Start for " + target_body.Name)
-            # [v6.0] stable_v1_backup의 0.5m 관통 돌출 로직
             extrude_dist = 0.5 
             shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
                                           origin_pt.Y - direction.Y * extrude_dist/2, 
                                           origin_pt.Z - direction.Z * extrude_dist/2)
             
-            # [v6.0] 삐뚤어짐 방지 축 고정 결합
+            # [v6.3] 백업본 스타일 Frame 생성 (ref_x 결합)
             ref_x = Direction.DirX if abs(axis_list[0]) < 0.9 else Direction.DirY
             temp_frame = Frame.Create(shifted_origin, direction, ref_x)
             circle = Circle.Create(temp_frame, core_offset)
             
-            root = Window.ActiveWindow.Document.MainPart
-            # [v6.0] ITrimmedCurve 정밀 보정 추가
+            # [v6.4] 4단계 무적 커브 생성 로직 (clr.Convert 활용)
+            dc = None
             try:
-                geom = CurveSegment.Create(circle).AsTrimmedCurve()
-                dc = DesignCurve.Create(root, geom)
+                # Step 1: 정석적인 CurveSegment 방식
+                dc = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle))
             except:
-                dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+                try:
+                    # Step 2: ITrimmedCurve로 강제 캐스팅 (IronPython 특화)
+                    import clr
+                    geom = clr.Convert(CurveSegment.Create(circle), ITrimmedCurve)
+                    dc = DesignCurve.Create(GetRootPart(), geom)
+                except:
+                    try:
+                        # Step 3: Circle 객체 직접 전달 시도
+                        dc = DesignCurve.Create(GetRootPart(), circle)
+                    except:
+                        # Step 4: 최후의 보루
+                        dc = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle).AsTrimmedCurve())
+            
+            if not dc: raise Exception("All DesignCurve creation methods failed")
+            print("   [DEBUG] DesignCurve created successfully")
             
             tool_body = None
             try:
-                bodies_before = list(root.GetDescendants[IDesignBody]())
-                sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(dc)
+                bodies_before = list(GetRootPart().GetAllBodies())
+                sel = Selection.Create(dc)
                 
-                try:
-                    # 4개 인자 방식 시도
-                    ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
-                except:
-                    # 5개 인자 방식 시도
-                    ExtrudeEdges.Execute(sel, direction, extrude_dist, ExtrudeEdgeOptions(), None)
+                try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+                except: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
                 
-                bodies_after = list(root.GetDescendants[IDesignBody]())
+                bodies_after = list(GetRootPart().GetAllBodies())
                 new_bodies = [b for b in bodies_after if b not in bodies_before]
                 if new_bodies: tool_body = new_bodies[0]
-                
             except:
-                # [v6.0] 최후의 보루: Pull 도구 시도
                 try:
-                    bodies_before = list(root.GetDescendants[IDesignBody]())
-                    Pull.Execute(SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(dc), direction, extrude_dist, PullOptions(), None)
-                    bodies_after = list(root.GetDescendants[IDesignBody]())
+                    bodies_before = list(GetRootPart().GetAllBodies())
+                    Pull.Execute(Selection.Create(dc), direction, extrude_dist, PullOptions(), None)
+                    bodies_after = list(GetRootPart().GetAllBodies())
                     new_bodies = [b for b in bodies_after if b not in bodies_before]
                     if new_bodies: tool_body = new_bodies[0]
                 except: pass
@@ -159,47 +157,48 @@ def apply_ogrid(body_b64, center_list, axis_list, core_offset, idx, b_idx):
             if tool_body:
                 ALL_CUTTERS.append(tool_body)
                 try:
-                    target_sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(target_body)
-                    cutter_sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(tool_body.Faces)
-                    SplitBody.ByCutter(target_sel, cutter_sel, True, None)
+                    SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
                 except: pass
                 _move_to_comp(tool_body, b_idx)
             
             dc.Delete()
             print("   [OK] O-Grid Success")
         except Exception as e:
-            print("   [ERROR] O-grid error: " + str(e))
+            print("   [ERROR] O-grid fail: " + str(e))
 
 def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     
-    # [v6.0] 삐뚤어짐 방지 축 고정 결합
     ref_x = Direction.DirX if abs(normal_list[0]) < 0.9 else Direction.DirY
     frame = Frame.Create(origin, normal, ref_x)
     
     try:
         huge_radius = 5.0 
         circle_geom = Circle.Create(frame, huge_radius)
-        root = Window.ActiveWindow.Document.MainPart
-        # [v6.2] 평면 분할 시에도 ITrimmedCurve 형변환 명시적 처리
+        # [v6.4] 평면 분할 시에도 4단계 무적 커브 생성 로직 적용
+        dc = None
         try:
-            geom = CurveSegment.Create(circle_geom).AsTrimmedCurve()
-            dc = DesignCurve.Create(root, geom)
+            dc = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom))
         except:
             try:
-                dc = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
+                import clr
+                geom = clr.Convert(CurveSegment.Create(circle_geom), ITrimmedCurve)
+                dc = DesignCurve.Create(GetRootPart(), geom)
             except:
-                dc = DesignCurve.Create(root, circle_geom.AsTrimmedCurve())
+                try:
+                    dc = DesignCurve.Create(GetRootPart(), circle_geom)
+                except:
+                    dc = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom).AsTrimmedCurve())
         
-        bodies_before = list(root.GetDescendants[IDesignBody]())
-        sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(dc)
-        try:
-            Fill.Execute(sel, None)
-        except:
-            Fill.Execute(sel)
+        if not dc: raise Exception("All DesignCurve creation methods failed")
+        
+        bodies_before = list(GetRootPart().GetAllBodies())
+        sel = Selection.Create(dc)
+        try: Fill.Execute(sel, None)
+        except: Fill.Execute(sel)
             
-        bodies_after = list(root.GetDescendants[IDesignBody]())
+        bodies_after = list(GetRootPart().GetAllBodies())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         
         if new_bodies:
@@ -209,9 +208,7 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             targets = get_matching_bodies(body_b64)
             for target in targets:
                 try:
-                    target_sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(target)
-                    cutter_sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(tool_body.Faces)
-                    SplitBody.ByCutter(target_sel, cutter_sel, True, None)
+                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_body.Faces[0]), True, None)
                 except: pass
             _move_to_comp(tool_body, b_idx)
         
@@ -223,11 +220,10 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
 def finalize():
     if ALL_CUTTERS:
         try:
-            # 커터들 정리 및 공유 토폴로지 적용
             for cutter in ALL_CUTTERS:
                 try: cutter.Delete()
                 except: pass
-            PartSharedTopology.Share(Window.ActiveWindow.Document.MainPart, None)
+            PartSharedTopology.Share(GetRootPart(), None)
         except: pass
 
 # --- Execution ---
