@@ -137,39 +137,41 @@ def _move_to_comp(body, body_idx):
     try: ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
     except: pass
 
+import traceback
+
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
-    origin_pt = Point.Create(center[0], center[1], center[2])
-    direction = Direction.Create(axis[0], axis[1], axis[2])
-    root = GetRootPart()
     try:
+        origin_pt = Point.Create(center[0], center[1], center[2])
+        direction = Direction.Create(axis[0], axis[1], axis[2])
+        root = GetRootPart()
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-        # [v4.85] 커터를 충분히 길게(10m) 뽑아 확실한 분할 유도
         try: ExtrudeEdges.Execute(Selection.Create(dc), 10.0, ExtrudeEdgeOptions(), None)
         except: pass
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
             print("   [OK] O-Grid cutter created for {0}".format(targets[0].Name))
-            # [v4.85] 주석 해제: 실제 분할 실행!
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
             except: print("   [WARN] Split failed for {0}".format(targets[0].Name))
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
-    except: pass
+    except Exception:
+        print("   [ERROR] apply_ogrid failed:")
+        traceback.print_exc()
 
 def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
-    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
-    normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
-    root = GetRootPart()
     try:
+        origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
+        normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        root = GetRootPart()
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle = Circle.Create(Frame.Create(origin, normal), 20.0) # 더 크게 확장
+        circle = Circle.Create(Frame.Create(origin, normal), 20.0)
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
         try: Fill.Execute(Selection.Create(dc), None, FillOptions(), None)
         except: pass
@@ -177,12 +179,13 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
             print("   [OK] {0} cutter created for {1}".format(strategy, targets[0].Name))
-            # [v4.85] 주석 해제: 실제 분할 실행!
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
             except: print("   [WARN] Split failed for {0}".format(targets[0].Name))
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
-    except: pass
+    except Exception:
+        print("   [ERROR] apply_split_plane failed:")
+        traceback.print_exc()
 
 REPLACE_COMP_CREATION
 REPLACE_EXECUTION
