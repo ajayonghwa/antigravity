@@ -38,6 +38,14 @@ class SCDMGenerator:
 import math
 import base64
 import re
+import clr
+
+# [매뉴얼 1번 지침] API 참조 및 전역 네임스페이스 임포트
+clr.AddReference("SpaceClaim.Api.V22")
+from SpaceClaim.Api.V22 import *
+from SpaceClaim.Api.V22.Modeler import *
+from SpaceClaim.Api.V22.Geometry import *
+from SpaceClaim.Api.V22.Commands import *
 
 BODY_COMP_MAP = {{}}
 
@@ -83,20 +91,33 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # [v4.41] ComponentHelper.MoveBodiesToComponent API 사용 (가장 안정적인 방식)
-        from SpaceClaim.Api.V22.Modeler import ComponentHelper
-        ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
+        # [매뉴얼 2번 지침] 4개 인자 규칙 적용 (MoveToComponent.Execute)
+        MoveToComponent.Execute(Selection.Create(body), target_comp, True, None)
         return True
     except:
-        try: body.SetParent(target_comp); return True
+        try:
+            # [매뉴얼 12번 지침] 최후의 수단: 기하 복사 후 이동
+            new_shape = body.Shape.Copy()
+            DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
+            body.Delete()
+            return True
         except: return False
+
+def _get_dynamic_cutter_radius():
+    # [매뉴얼 8번 지침] 모델 크기에 따른 동적 스케일링
+    try:
+        r = GetRootPart().Range
+        diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
+        return diag * 1.5
+    except: return 50.0
 
 def _safe_split_multi(targets, cutter_face):
     if not targets: return False
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
-        SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face))
+        # [매뉴얼 2번 지침] 4개 인자 규칙 적용
+        SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
         return True
     except: return False
 
@@ -104,7 +125,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     tname = base64.b64decode(body_b64).decode('utf-8')
-    print(" -> Step {{0}}: O-GRID for {{1}} ({{2}} bodies)".format(idx, tname, len(targets)))
     origin_pt = Point.Create(center[0], center[1], center[2])
     direction = Direction.Create(axis[0], axis[1], axis[2])
     root = GetRootPart()
@@ -112,6 +132,7 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
+        # [매뉴얼 2번 지침] 4인자 규칙
         ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
@@ -126,15 +147,16 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     tname = base64.b64decode(body_b64).decode('utf-8')
-    print(" -> Step {{0}}: {{1}} for {{2}} ({{3}} bodies)".format(idx, strategy, tname, len(targets)))
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     root = GetRootPart()
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle_geom = Circle.Create(Frame.Create(origin, normal), 100.0)
+        radius = _get_dynamic_cutter_radius()
+        circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        Fill.Execute(Selection.Create(design_curve))
+        # [매뉴얼 4번 지침] SECTOR/AXIAL은 Fill.Execute 사용
+        Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:

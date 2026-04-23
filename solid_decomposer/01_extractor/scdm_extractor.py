@@ -1,6 +1,20 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import clr
+
+def initialize_api():
+    # [매뉴얼 1번 지침] API 참조 및 전역 네임스페이스 임포트
+    try:
+        clr.AddReference("SpaceClaim.Api.V22")
+        from SpaceClaim.Api.V22 import *
+        from SpaceClaim.Api.V22.Modeler import *
+        from SpaceClaim.Api.V22.Geometry import *
+        from SpaceClaim.Api.V22.Commands import *
+        return True
+    except: return False
+
+initialize_api()
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
@@ -30,7 +44,7 @@ def apply_mat(m, p):
     return [x, y, z]
 
 def get_face_data(face, matrix):
-    # [v4.41] .Id 대신 모든 객체에 존재하는 .GetHashCode()를 사용하여 플래너의 혼선 방지
+    # [v4.42] 매뉴얼 11번 지침에 따라 고유 식별을 위해 GetHashCode 사용
     f_id = face.GetHashCode()
     data = {"id": f_id, "type": "Unknown", "area": 0.0, "box": {"min": [0,0,0], "max": [0,0,0]}, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
     try:
@@ -58,7 +72,7 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM HashID Extraction (v4.41) ---")
+    print("--- SCDM Manual-based Extraction (v4.42) ---")
     all_bodies_data = []
     root = GetRootPart()
     try: bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
@@ -75,9 +89,9 @@ def extract_geometry():
         
         original_name = body.Name
         unique_name = "AUTO_BODY_" + str(i)
-        try:
-            # [v4.41] RenameInstance 대신 직접 대입을 우선 시도 (예외 처리 포함)
-            body.Name = unique_name
+        
+        # [v4.42] 이름 변경이 실패해도 진행 (매뉴얼 9번)
+        try: body.Name = unique_name
         except: pass
         
         actual_name = body.Name
