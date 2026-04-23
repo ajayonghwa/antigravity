@@ -151,23 +151,34 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         if not root: root = Application.GetActiveDocument().MainPart
         
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        print("   [DEBUG 2] Direct Cylinder creation (R={0})".format(offset))
+        print("   [DEBUG 2] Circle creation (R={0})".format(offset))
         
-        # [v4.93] Extrude 대신 Body.CreateCylinder 직접 호출 (가장 안정적)
-        # origin, axis, radius, height
+        frame = Frame.Create(origin_pt, direction)
+        circle = Circle.Create(frame, offset)
+        dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+        
+        # [v4.94] 사용자가 제안한 구문 적용: ExtrudeEdges.Execute
         try:
-            new_solid = Body.CreateCylinder(origin_pt, direction, offset, 10.0) # 10m height
-            new_b = DesignBody.Create(root, "Cutter_Ogrid", new_solid)
-            print("   [DEBUG 3] Direct Cylinder success")
+            options = ExtrudeEdgeOptions()
+            # MM() 함수를 사용하여 거리 지정 (10m = 10,000mm)
+            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), None, MM(10000), options, None)
+            print("   [DEBUG 3] ExtrudeEdges success")
         except Exception as ce:
-            print("   [DEBUG 3-FAIL] Cylinder creation error: " + str(ce))
-            return
+            print("   [DEBUG 3-FAIL] ExtrudeEdges error: " + str(ce))
+            # 폴백: 직접 기하 생성 시도
+            new_solid = Body.CreateCylinder(origin_pt, direction, offset, 10.0)
+            new_b = DesignBody.Create(root, "Cutter_Ogrid", new_solid)
 
-        if new_b:
+        bodies_after = list(root.GetDescendants[IDesignBody]())
+        new_b_list = [b for b in bodies_after if b not in bodies_before]
+        
+        if new_b_list:
+            new_b = new_b_list[0]
             print("   [DEBUG 4] Starting split")
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
+        dc.Delete()
         print("   [OK] O-Grid complete for {0}".format(targets[0].Name))
     except Exception as e:
         print("   [ERROR] apply_ogrid crashed: " + str(e))
@@ -183,24 +194,31 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         root = GetRootPart()
         if not root: root = Application.GetActiveDocument().MainPart
         
-        print("   [DEBUG 2] Direct Planar Body creation")
-        # [v4.93] Plane 기반 직접 생성
+        bodies_before = list(root.GetDescendants[IDesignBody]())
+        print("   [DEBUG 2] Plane creation")
+        
+        frame = Frame.Create(origin, normal)
+        circle = Circle.Create(frame, 20.0) # 20m
+        dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+        
         try:
-            frame = Frame.Create(origin, normal)
-            plane = Plane.Create(frame)
-            # 사각형 형태의 평면 바디 생성 (20m x 20m)
-            new_solid = Body.CreatePlanarBody(plane, Interval.Create(-10.0, 10.0), Interval.Create(-10.0, 10.0))
-            new_b = DesignBody.Create(root, "Cutter_Plane", new_solid)
-            print("   [DEBUG 3] Direct Plane success")
+            # [v4.94] Fill도 사용자가 알려준 방식에 맞춰 안정적으로 호출
+            options = FillOptions()
+            Fill.Execute(Selection.Create(dc.Edges[0]), options, None)
+            print("   [DEBUG 3] Fill success")
         except Exception as pe:
-            print("   [DEBUG 3-FAIL] Plane creation error: " + str(pe))
-            return
+            print("   [DEBUG 3-FAIL] Fill error: " + str(pe))
             
-        if new_b:
+        bodies_after = list(root.GetDescendants[IDesignBody]())
+        new_b_list = [b for b in bodies_after if b not in bodies_before]
+        
+        if new_b_list:
+            new_b = new_b_list[0]
             print("   [DEBUG 4] Starting split")
             try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
+        dc.Delete()
         print("   [OK] {0} complete for {1}".format(strategy, targets[0].Name))
     except Exception as e:
         print("   [ERROR] apply_split_plane crashed: " + str(e))
