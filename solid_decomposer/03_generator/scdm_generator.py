@@ -182,11 +182,15 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         huge_radius = 5.0 
         circle_geom = Circle.Create(frame, huge_radius)
         root = Window.ActiveWindow.Document.MainPart
+        # [v6.2] 평면 분할 시에도 ITrimmedCurve 형변환 명시적 처리
         try:
             geom = CurveSegment.Create(circle_geom).AsTrimmedCurve()
             dc = DesignCurve.Create(root, geom)
         except:
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
+            try:
+                dc = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
+            except:
+                dc = DesignCurve.Create(root, circle_geom.AsTrimmedCurve())
         
         bodies_before = list(root.GetDescendants[IDesignBody]())
         sel = SpaceClaim.Api.V22.Scripting.Selection.Selection.Create(dc)
