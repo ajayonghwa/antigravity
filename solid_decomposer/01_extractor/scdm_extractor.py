@@ -3,17 +3,17 @@ import json
 import os
 import clr
 
-# [v4.47] IronPython 2.7 호환성을 위해 가장 보수적이고 명시적인 방식으로 임포트
+# [v4.48] 이름 충돌 방지를 위해 네임스페이스를 별칭으로 관리
 try:
     clr.AddReference("SpaceClaim.Api.V22")
-    from SpaceClaim.Api.V22 import *
-    from SpaceClaim.Api.V22.Modeler import *
-    from SpaceClaim.Api.V22.Geometry import *
-    from SpaceClaim.Api.V22.Scripting import *
-    from SpaceClaim.Api.V22.Commands import *
-    print(" - [INFO] API V22 Loaded Successfully")
+    import SpaceClaim.Api.V22 as SCDM
+    import SpaceClaim.Api.V22.Modeler as Modeler
+    import SpaceClaim.Api.V22.Geometry as Geometry
+    import SpaceClaim.Api.V22.Scripting as Scripting
+    import SpaceClaim.Api.V22.Commands as Commands
+    print(" - [INFO] API V22 Absolute Mapping Success")
 except Exception as e:
-    print(" - [ERROR] API Load Failed: " + str(e))
+    print(" - [ERROR] API Mapping Failed: " + str(e))
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
@@ -39,7 +39,8 @@ def get_face_data(face, matrix):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
-            bbox = face.GetBoundingBox(Matrix.Identity)
+            # v4.48: 절대 경로 사용
+            bbox = face.GetBoundingBox(Geometry.Matrix.Identity)
             data["origin"] = [bbox.Center.X, bbox.Center.Y, bbox.Center.Z]
             f = geom.Frame
             data["axis"] = [
@@ -56,14 +57,14 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Explicit Extraction (v4.47) ---")
+    print("--- SCDM Absolute Extraction (v4.48) ---")
     all_bodies_data = []
-    root = GetRootPart()
+    root = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document) # 안전한 Root 획득
     try:
-        bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
-        if not bodies: bodies = list(root.GetDescendants[IDesignBody]())
+        bodies = list(SCDM.Window.ActiveWindow.GetAllOccurrences[SCDM.IDesignBody]())
+        if not bodies: bodies = list(root.GetDescendants[SCDM.IDesignBody]())
     except:
-        bodies = list(root.GetDescendants[IDesignBody]())
+        bodies = list(root.GetDescendants[SCDM.IDesignBody]())
     
     print(" - Found {0} bodies".format(len(bodies)))
 

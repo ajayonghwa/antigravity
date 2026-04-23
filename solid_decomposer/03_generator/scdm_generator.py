@@ -37,28 +37,27 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})\n".format(body_b64, split['origin'], split['normal'], strat, i, body_idx)
 
-        # [v4.47] f-string을 사용하지 않고 문자열 템플릿 사용 (중괄호 에러 방지)
         template = """# -*- coding: utf-8 -*-
 import math
 import base64
 import re
 import clr
 
-# [v4.47] 명시적 V22 참조 및 전역 임포트
+# [v4.48] 절대 경로 임포트 및 별칭 지정 (이름 충돌 방지)
 try:
     clr.AddReference("SpaceClaim.Api.V22")
-    from SpaceClaim.Api.V22 import *
-    from SpaceClaim.Api.V22.Modeler import *
-    from SpaceClaim.Api.V22.Geometry import *
-    from SpaceClaim.Api.V22.Scripting import *
-    from SpaceClaim.Api.V22.Commands import *
+    import SpaceClaim.Api.V22 as SCDM
+    import SpaceClaim.Api.V22.Modeler as Modeler
+    import SpaceClaim.Api.V22.Geometry as Geometry
+    import SpaceClaim.Api.V22.Scripting as Scripting
+    import SpaceClaim.Api.V22.Commands as Commands
 except: pass
 
 BODY_COMP_MAP = {}
 
 def get_all_bodies_recursive(part, body_list):
     try:
-        for b in part.GetDescendants[IDesignBody](): body_list.append(b)
+        for b in part.GetDescendants[SCDM.IDesignBody](): body_list.append(b)
         return
     except: pass
     for body in part.Bodies: body_list.append(body)
@@ -69,7 +68,7 @@ def get_matching_bodies(body_b64):
     try: target_name = base64.b64decode(body_b64).decode('utf-8')
     except: target_name = body_b64
     all_bodies = []
-    get_all_bodies_recursive(GetRootPart(), all_bodies)
+    get_all_bodies_recursive(SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document), all_bodies)
     matched = []
     pattern = re.compile(re.escape(target_name) + r"(_|\\s|\\(|\\d|$)")
     for b in all_bodies:
@@ -78,7 +77,7 @@ def get_matching_bodies(body_b64):
 
 def create_body_component(name_b64, body_idx):
     global BODY_COMP_MAP
-    root = GetRootPart()
+    root = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document)
     try: t_name = base64.b64decode(name_b64).decode('utf-8')
     except: t_name = name_b64
     safe_name = "".join(c for c in t_name if c.isalnum() or c == "_")
@@ -88,8 +87,8 @@ def create_body_component(name_b64, body_idx):
         if comp.Name == comp_name: target_comp = comp; break
     if not target_comp:
         try:
-            target_part = Part.Create(root.Document, comp_name)
-            target_comp = Component.Create(root, target_part)
+            target_part = Modeler.Part.Create(root.Document, comp_name)
+            target_comp = Modeler.Component.Create(root, target_part)
         except: pass
     BODY_COMP_MAP[body_idx] = target_comp
 
@@ -98,25 +97,23 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # 매뉴얼 지침: ComponentHelper 우선 사용
-        ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
+        Modeler.ComponentHelper.MoveBodiesToComponent(SCDM.Selection.Create(body), target_comp)
         return True
     except:
         try:
-            MoveToComponent.Execute(Selection.Create(body), target_comp, True, None)
+            Commands.MoveToComponent.Execute(SCDM.Selection.Create(body), target_comp, True, None)
             return True
         except:
             try:
-                # 매뉴얼 12번 지침: Copy/Delete
                 new_shape = body.Shape.Copy()
-                DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
+                SCDM.DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
                 body.Delete()
                 return True
             except: return False
 
 def _get_dynamic_cutter_radius():
     try:
-        r = GetRootPart().Range
+        r = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document).Range
         diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
         return diag * 2.0
     except: return 100.0
@@ -126,27 +123,25 @@ def _safe_split_multi(targets, cutter_face):
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
-        # 매뉴얼 2번 지침: ByCutter (4인자)
-        SplitBody.ByCutter(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
+        Commands.SplitBody.ByCutter(SCDM.Selection.Create(valid_targets), SCDM.Selection.Create(cutter_face), True, None)
         return True
     except:
-        try: SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
+        try: Commands.SplitBody.Execute(SCDM.Selection.Create(valid_targets), SCDM.Selection.Create(cutter_face), True, None)
         except: return False
 
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
-    tname = base64.b64decode(body_b64).decode('utf-8')
-    origin_pt = Point.Create(center[0], center[1], center[2])
-    direction = Direction.Create(axis[0], axis[1], axis[2])
-    root = GetRootPart()
+    origin_pt = Geometry.Point.Create(center[0], center[1], center[2])
+    direction = Geometry.Direction.Create(axis[0], axis[1], axis[2])
+    root = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document)
     try:
-        bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
-        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        try: ExtrudeEdges.ByDistance(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
-        except: ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
-        bodies_after = list(root.GetDescendants[IDesignBody]())
+        bodies_before = list(root.GetDescendants[SCDM.IDesignBody]())
+        circle = Geometry.Circle.Create(Geometry.Frame.Create(origin_pt, direction), offset)
+        design_curve = SCDM.DesignCurve.Create(root, Geometry.CurveSegment.Create(circle))
+        try: Commands.ExtrudeEdges.ByDistance(SCDM.Selection.Create(design_curve), 20.0, Modeler.ExtrudeEdgeOptions(), None)
+        except: Commands.ExtrudeEdges.Execute(SCDM.Selection.Create(design_curve), 20.0, Modeler.ExtrudeEdgeOptions(), None)
+        bodies_after = list(root.GetDescendants[SCDM.IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
@@ -158,18 +153,17 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
 def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
-    tname = base64.b64decode(body_b64).decode('utf-8')
-    origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
-    normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
-    root = GetRootPart()
+    origin = Geometry.Point.Create(origin_list[0], origin_list[1], origin_list[2])
+    normal = Geometry.Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+    root = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document)
     try:
-        bodies_before = list(root.GetDescendants[IDesignBody]())
+        bodies_before = list(root.GetDescendants[SCDM.IDesignBody]())
         radius = _get_dynamic_cutter_radius()
-        circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
-        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        try: Fill.By(Selection.Create(design_curve))
-        except: Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
-        bodies_after = list(root.GetDescendants[IDesignBody]())
+        circle_geom = Geometry.Circle.Create(Geometry.Frame.Create(origin, normal), radius)
+        design_curve = SCDM.DesignCurve.Create(root, Geometry.CurveSegment.Create(circle_geom))
+        try: Commands.Fill.By(SCDM.Selection.Create(design_curve))
+        except: Commands.Fill.Execute(SCDM.Selection.Create(design_curve), None, Modeler.FillOptions(), None)
+        bodies_after = list(root.GetDescendants[SCDM.IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
