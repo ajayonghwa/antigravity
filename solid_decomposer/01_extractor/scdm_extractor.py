@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.78] Box 객체의 MinCorner/MaxCorner를 통한 좌표 추출 오류 해결
+# [v4.79] 전역 좌표계 변환 정상화 및 Matrix 인덱서 접근
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -30,7 +30,7 @@ def get_face_data(face, matrix_obj):
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
         
-        # [v4.78] Modeler.Box는 MinCorner, MaxCorner 속성을 가짐
+        # [v4.79] Matrix 인덱서 접근 방식 사용 (m[row, col])
         bbox = shape.GetBoundingBox(matrix_obj)
         mi = bbox.MinCorner
         ma = bbox.MaxCorner
@@ -57,22 +57,23 @@ def get_face_data(face, matrix_obj):
         if r_raw > 0:
             r_mm = r_raw * 1000.0 if r_raw < 0.1 else r_raw
             data["radius"] = round(r_mm, 8)
-            print("   [DEBUG-FOUND] Face {0} ({1}) -> Raw={2:.6f}, R={3:.4f}mm".format(f_id, data["type"], r_raw, r_mm))
+            print("   [DEBUG-FOUND] Face {0} -> R={1:.4f}mm".format(f_id, r_mm))
 
         if hasattr(geom, "Frame"):
             f = geom.Frame
             m = matrix_obj
+            # [v4.79] M11 대신 m[0,0] 인덱서 사용
             data["axis"] = [
-                round(m.M11*f.DirZ.X + m.M12*f.DirZ.Y + m.M13*f.DirZ.Z, 8),
-                round(m.M21*f.DirZ.X + m.M22*f.DirZ.Y + m.M23*f.DirZ.Z, 8),
-                round(m.M31*f.DirZ.X + m.M32*f.DirZ.Y + m.M33*f.DirZ.Z, 8)
+                round(m[0,0]*f.DirZ.X + m[0,1]*f.DirZ.Y + m[0,2]*f.DirZ.Z, 8),
+                round(m[1,0]*f.DirZ.X + m[1,1]*f.DirZ.Y + m[1,2]*f.DirZ.Z, 8),
+                round(m[2,0]*f.DirZ.X + m[2,1]*f.DirZ.Y + m[2,2]*f.DirZ.Z, 8)
             ]
     except Exception as e:
         print("   [DEBUG-ERR] Face {0}: {1}".format(f_id, str(e)))
     return data
 
 def extract_geometry():
-    print("--- SCDM Box Compatibility Extraction (v4.78) ---")
+    print("--- SCDM World-Alignment Extraction (v4.79) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
@@ -88,8 +89,9 @@ def extract_geometry():
         
         for i, body in enumerate(bodies_list):
             b_name = getattr(body, "Name", "Body_" + str(i))
+            # [v4.79] Inverse 제거! World 좌표계를 위해 TransformToMaster 직접 사용
             t_mat = Matrix.Identity
-            if body.Instance: t_mat = body.TransformToMaster.Inverse
+            if body.Instance: t_mat = body.TransformToMaster
             
             bdata = {"body_index": i, "body_name": b_name, "volume": body.Shape.Volume * 1e9, "faces": []}
             for face in list(body.Faces):
@@ -104,5 +106,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete (v4.78 Box Corners fixed).")
+    print("\n[FINISH] Extraction complete (World Aligned).")
 except Exception as e: print("\n[FATAL] " + str(e))
