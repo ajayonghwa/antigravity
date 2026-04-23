@@ -40,32 +40,25 @@ import base64
 import re
 import clr
 
-# [v4.45] 투명한 디버깅을 위해 에러 출력 복구 및 API 임포트 최적화
-def setup_api():
-    try:
-        import SpaceClaim.Api as Api
-        return Api
-    except Exception as e:
-        print(" [DEBUG] Standard Import failed: " + str(e))
-        for v in [22, 21, 20, 19, 18, 17]:
-            try:
-                ref = "SpaceClaim.Api.V" + str(v)
-                clr.AddReference(ref)
-                exec("import SpaceClaim.Api.V{{0}} as Api".format(v))
-                return Api
-            except: continue
-    return None
+# [v4.46] 매뉴얼 지침 100% 반영: 명시적 버전 참조 및 전역 네임스페이스 임포트
+def initialize_api():
+    for v in [22, 21, 20, 19, 18, 17]:
+        try:
+            clr.AddReference("SpaceClaim.Api.V{{0}}".format(v))
+            # 매뉴얼 16번 지침: 전역에 풀기
+            from SpaceClaim.Api.V{{0}} import *
+            from SpaceClaim.Api.V{{0}}.Modeler import *
+            from SpaceClaim.Api.V{{0}}.Geometry import *
+            from SpaceClaim.Api.V{{0}}.Scripting import *
+            from SpaceClaim.Api.V{{0}}.Commands import *
+            # 현재 스택에 전역화
+            globals().update(locals())
+            print(" - [INFO] API V{{0}} Loaded".format(v))
+            return True
+        except: continue
+    return False
 
-SCDM_API = setup_api()
-
-def get_api_obj(path):
-    try:
-        obj = SCDM_API
-        for p in path.split('.'): obj = getattr(obj, p)
-        return obj
-    except Exception as e:
-        print(" [DEBUG] Failed to get API obj {{0}}: {{1}}".format(path, str(e)))
-        return None
+initialize_api()
 
 BODY_COMP_MAP = {{}}
 
@@ -103,7 +96,7 @@ def create_body_component(name_b64, body_idx):
         try:
             target_part = Part.Create(root.Document, comp_name)
             target_comp = Component.Create(root, target_part)
-        except Exception as e: print(" [DEBUG] Comp Creation failed: " + str(e))
+        except: pass
     BODY_COMP_MAP[body_idx] = target_comp
 
 def _move_body_to_comp(body, body_idx):
@@ -111,29 +104,24 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # 1차 시도: ComponentHelper
-        helper = get_api_obj("Modeler.ComponentHelper")
-        if helper:
-            helper.MoveBodiesToComponent(Selection.Create(body), target_comp)
-            return True
-        # 2차 시도: MoveToComponent (인자 줄임)
-        MoveToComponent.Execute(Selection.Create(body), target_comp)
+        # 매뉴얼 2번 지침: ComponentHelper 우선 사용
+        ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
         return True
     except Exception as e:
-        print(" [DEBUG] Standard move failed: " + str(e) + ". Trying fallback...")
+        print(" [DEBUG] MoveBodiesToComponent failed: " + str(e))
         try:
-            body.SetParent(target_comp)
+            # 보조 수단: MoveToComponent 명령어 (전역 임포트 덕분에 바로 사용 가능)
+            MoveToComponent.Execute(Selection.Create(body), target_comp, True, None)
             return True
         except Exception as e2:
-            print(" [DEBUG] SetParent failed: " + str(e2) + ". Trying Manual Independence...")
+            print(" [DEBUG] MoveToComponent failed: " + str(e2))
             try:
+                # 최후의 수단: 매뉴얼 12번 지침 (Copy/Delete)
                 new_shape = body.Shape.Copy()
                 DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
                 body.Delete()
                 return True
-            except Exception as e3:
-                print(" [DEBUG] Manual Independence failed: " + str(e3))
-                return False
+            except: return False
 
 def _get_dynamic_cutter_radius():
     try:
@@ -147,11 +135,11 @@ def _safe_split_multi(targets, cutter_face):
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
-        # 4인자 규칙 시도
-        SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
+        # [매뉴얼 2번 지침] SplitBody.ByCutter (4인자 규칙)
+        SplitBody.ByCutter(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
         return True
     except Exception as e:
-        print(" [DEBUG] SplitBody failed: " + str(e))
+        print(" [DEBUG] SplitBody.ByCutter failed: " + str(e))
         return False
 
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
@@ -165,7 +153,9 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
+        # [매뉴얼 2번 지침] ExtrudeEdges.ByDistance
+        try: ExtrudeEdges.ByDistance(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
+        except: ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
@@ -187,12 +177,9 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         radius = _get_dynamic_cutter_radius()
         circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        # [v4.45] FillMode 에러 해결을 위해 인자를 최소화하여 시도
-        try:
-            Fill.Execute(Selection.Create(design_curve))
-        except:
-            # 실패 시 매뉴얼대로 옵션 포함 시도
-            Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
+        # [매뉴얼 2번 지침] Fill.By (또는 Execute)
+        try: Fill.By(Selection.Create(design_curve))
+        except: Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
         
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]

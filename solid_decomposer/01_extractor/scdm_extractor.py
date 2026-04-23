@@ -3,32 +3,25 @@ import json
 import os
 import clr
 
-# [v4.44] 버전 번호를 명시하지 않는 표준 임포트 방식으로 회귀
-def setup_api():
-    try:
-        # 버전 없이 시도 (이미 로드된 환경 대응)
-        import SpaceClaim.Api as Api
-        return Api
-    except:
-        # 실패 시 V22~V17 강제 참조 시도
-        for v in [22, 21, 20, 19, 18, 17]:
-            try:
-                clr.AddReference("SpaceClaim.Api.V" + str(v))
-                exec("import SpaceClaim.Api.V{0} as Api".format(v))
-                return Api
-            except: continue
+# [v4.46] 매뉴얼 1번/2번 지침을 100% 반영한 구조
+def initialize_scdm_env():
+    # V22~V17 역순 참조 및 하위 네임스페이스 명시적 전역 임포트
+    for v in [22, 21, 20, 19, 18, 17]:
+        try:
+            ref = "SpaceClaim.Api.V" + str(v)
+            clr.AddReference(ref)
+            # 매뉴얼 16번 지침: 전역 네임스페이스에 풀기
+            exec("from SpaceClaim.Api.V{0} import *".format(v), globals())
+            exec("from SpaceClaim.Api.V{0}.Modeler import *".format(v), globals())
+            exec("from SpaceClaim.Api.V{0}.Geometry import *".format(v), globals())
+            exec("from SpaceClaim.Api.V{0}.Scripting import *".format(v), globals())
+            exec("from SpaceClaim.Api.V{0}.Commands import *".format(v), globals())
+            print(" - [INFO] Initialized SCDM API V{0}".format(v))
+            return v
+        except: continue
     return None
 
-API = setup_api()
-
-# 전역 접근을 위한 매핑
-def get_scdm_obj(path_str):
-    try:
-        parts = path_str.split('.')
-        obj = API
-        for p in parts: obj = getattr(obj, p)
-        return obj
-    except: return None
+API_VERSION = initialize_scdm_env()
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
@@ -59,10 +52,9 @@ def get_face_data(face, matrix):
             g_type = geom.GetType().Name
             data["type"] = g_type
             
-            # [v4.44] Matrix.Identity를 안전하게 가져옴
-            sc_mat_cls = get_scdm_obj("Geometry.Matrix")
-            if sc_mat_cls:
-                bbox = face.GetBoundingBox(sc_mat_cls.Identity)
+            # v4.46: Matrix.Identity (전역 임포트 덕분에 직접 접근 가능)
+            try:
+                bbox = face.GetBoundingBox(Matrix.Identity)
                 data["origin"] = [bbox.Center.X, bbox.Center.Y, bbox.Center.Z]
                 f = geom.Frame
                 data["axis"] = [
@@ -72,6 +64,7 @@ def get_face_data(face, matrix):
                 ]
                 data["box"]["min"] = [bbox.Min.X, bbox.Min.Y, bbox.Min.Z]
                 data["box"]["max"] = [bbox.Max.X, bbox.Max.Y, bbox.Max.Z]
+            except: pass
             
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
@@ -80,7 +73,7 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Safe API Extraction (v4.44) ---")
+    print("--- SCDM Manual-Based Extraction (v4.46) ---")
     all_bodies_data = []
     root = GetRootPart()
     try:
@@ -93,8 +86,8 @@ def extract_geometry():
     for i, body in enumerate(bodies):
         matrix_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
         try:
-            comp = getattr(body, "ParentComponent", None)
-            if not comp: comp = getattr(body, "OccurrenceParent", None)
+            comp = body.ParentComponent if hasattr(body, "ParentComponent") else None
+            if not comp and hasattr(body, "OccurrenceParent"): comp = body.OccurrenceParent
             if comp: matrix_py = get_python_matrix_from_obj(comp.TransformToRoot)
         except: pass
         
