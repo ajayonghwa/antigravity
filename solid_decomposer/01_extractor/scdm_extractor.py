@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.68] 전천후 반경 추출 (Any-Two BBox Match + Area/Height 역산)
+# [v4.69] 객체 속성 조사(dir) 및 안정 버전 로직 복구
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -26,57 +26,55 @@ def get_face_data(face, matrix_obj):
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
         
-        # 1. 전역 좌표 중심점
+        # 전역 중심점 계산
         bbox = face.GetBoundingBox(matrix_obj)
         c = bbox.Center
         data["origin"] = [round(c.X * 1000.0, 8), round(c.Y * 1000.0, 8), round(c.Z * 1000.0, 8)]
         
         r = 0.0
         method = ""
-        # 방식 A: API 속성 직접 탐색
-        for r_attr in ["Radius", "Radius0", "MajorRadius"]:
-            if hasattr(geom, r_attr):
-                val = getattr(geom, r_attr)
-                if val > 1e-7: r = val; method = "API_ATTR"; break
         
-        # 방식 B: 모서리(Edge) 전수 조사
-        if r <= 0:
-            for edge in face.Edges:
-                eg = edge.Shape.Geometry
-                for r_attr in ["Radius", "Radius0"]:
-                    if hasattr(eg, r_attr):
-                        val = getattr(eg, r_attr)
-                        if val > 1e-7: r = val; method = "EDGE_GEOM"; break
-                if r > 0: break
+        # [v4.69 DEBUG] 기하 객체 속성 조사 (최초 1회성 로깅)
+        # attrs = dir(geom)
+        # if "Cylinder" in data["type"]: print("   [DEBUG] Cylinder Attrs: " + str(attrs[:10]))
 
-        # 방식 C & D: 기하학적 추론 (v4.68 핵심)
-        local_bbox = face.GetBoundingBox(Matrix.Identity)
-        dx, dy, dz = local_bbox.Size.X, local_bbox.Size.Y, local_bbox.Size.Z
-        dims = sorted([dx, dy, dz], reverse=True) # [Max, Mid, Min]
-        
-        if r <= 0 and dims[1] > 1e-7:
-            # 방식 C: 어떤 두 변이라도 비슷하면 원형/원통으로 간주
-            # (Case 1: Max-Mid 비슷 -> 납작한 원반 / Case 2: Mid-Min 비슷 -> 길쭉한 원통)
-            if abs(dims[0] - dims[1]) / dims[0] < 0.2:
-                r = (dims[0] + dims[1]) / 4.0
-                method = "BBOX_MAX_MID"
-            elif abs(dims[1] - dims[2]) / (dims[1] + 1e-9) < 0.2:
-                r = (dims[1] + dims[2]) / 4.0
-                method = "BBOX_MID_MIN"
+        # 1순위: 모서리(Edge) 기하 정보 (안정 버전에서 주로 쓰던 방식)
+        for edge in face.Edges:
+            e_geom = edge.Shape.Geometry
+            # ICircle 또는 직접 속성 체크
+            for r_attr in ["Radius", "Radius0"]:
+                if hasattr(e_geom, r_attr):
+                    val = getattr(e_geom, r_attr)
+                    if val > 1e-8: r = val; method = "EDGE_GEOM"; break
+            if r > 0: break
             
-            # 방식 D: 넓이와 최대 높이를 이용한 역산 (Area = 2*pi*r*h)
-            if r <= 0 and dims[0] > 1e-7:
-                # r = Area / (2 * pi * h)
-                r_calc = (face.Area) / (2 * math.pi * dims[0])
-                if r_calc > 1e-7 and r_calc < dims[0]: # 계산된 반경이 유효한 범위 내일 때
-                    r = r_calc
-                    method = "AREA_INFER"
+        # 2순위: 면(Face) 기하 정보
+        if r <= 0:
+            for r_attr in ["Radius", "Radius0", "MajorRadius"]:
+                if hasattr(geom, r_attr):
+                    val = getattr(geom, r_attr)
+                    if val > 1e-8: r = val; method = "FACE_GEOM"; break
+
+        # 3순위: 바운딩 박스 추론 (최후의 수단)
+        if r <= 0:
+            l_bbox = face.GetBoundingBox(Matrix.Identity)
+            dx, dy, dz = l_bbox.Size.X, l_bbox.Size.Y, l_bbox.Size.Z
+            dims = sorted([dx, dy, dz], reverse=True)
+            if dims[1] > 1e-8:
+                # 어느 두 변이 대략적으로 비슷하면 (오차 30%까지 허용)
+                if abs(dims[0] - dims[1]) / (dims[0] + 1e-9) < 0.3:
+                    r = (dims[0] + dims[1]) / 4.0
+                    method = "BBOX_INFER"
+                elif abs(dims[1] - dims[2]) / (dims[1] + 1e-9) < 0.3:
+                    r = (dims[1] + dims[2]) / 4.0
+                    method = "BBOX_INFER_SMALL"
 
         if r > 0:
             data["radius"] = round(r * 1000.0, 8)
             if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-            print("   [FOUND] Face {0} -> R={1:.4f}mm (Method: {2})".format(f_id, r*1000.0, method))
+            print("   [FOUND] Face {0} ({1}) -> R={2:.4f}mm via {3}".format(f_id, data["type"], r*1000.0, method))
             
+        # 축 계산
         if hasattr(geom, "Frame"):
             f = geom.Frame
             m = matrix_obj
@@ -89,12 +87,11 @@ def get_face_data(face, matrix_obj):
     return data
 
 def extract_geometry():
-    print("--- SCDM Universal Extraction (v4.68) ---")
+    print("--- SCDM Legacy Recovery Extraction (v4.69) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
         if not root: root = Application.GetActiveDocument().MainPart
-        if not root: return [], [], "mm"
         
         all_bodies = list(root.GetDescendants[IDesignBody]())
         if not all_bodies:
@@ -102,7 +99,7 @@ def extract_geometry():
             for comp in root.Components:
                 for b in comp.Template.Bodies: all_bodies.append(b)
 
-        print(" - Processing {0} body occurrences...".format(len(all_bodies)))
+        print(" - Processing {0} bodies...".format(len(all_bodies)))
         
         for i, body in enumerate(all_bodies):
             b_name = getattr(body, "Name", "Body_" + str(i))
@@ -113,7 +110,7 @@ def extract_geometry():
             for face in list(body.Faces):
                 bdata["faces"].append(get_face_data(face, t_mat))
             final_bodies_data.append(bdata)
-            print("   [OK] Body '{0}' extraction complete.".format(b_name))
+            print("   [OK] {0} complete.".format(b_name))
                 
     except Exception as e: print(" - [FATAL] Extraction error: " + str(e))
     return final_bodies_data, [], "mm"
@@ -122,5 +119,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Universal extraction complete.")
+    print("\n[FINISH] Extraction complete. Legacy paths recovered.")
 except Exception as e: print("\n[FATAL] " + str(e))
