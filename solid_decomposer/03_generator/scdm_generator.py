@@ -142,7 +142,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
-        # [v4.99] Full Path 명시하여 네임스페이스 충돌 방지
         g = SpaceClaim.Api.V22.Geometry
         origin_pt = g.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
         direction = g.Direction.Create(axis[0], axis[1], axis[2])
@@ -153,11 +152,16 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            frame = g.Frame.Create(origin_pt, direction)
+            # [v5.00] 회전 방지를 위해 정렬된 프레임 생성
+            # 노멀 벡터(direction)와 수직인 보조 벡터 계산
+            ref = g.Direction.DirZ
+            if abs(direction.Z) > 0.9: ref = g.Direction.DirX
+            x_axis = g.Direction.Cross(direction, ref)
+            frame = g.Frame.Create(origin_pt, direction, x_axis)
+            
             circle = g.Circle.Create(frame, MM(offset*1000))
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            # 사용자 제안 방식 1: 원통형 Extrude
             ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), None, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
@@ -191,18 +195,17 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         if not root: root = Application.GetActiveDocument().MainPart
         
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        print("   [DEBUG 2] Creating Cutter by Vector Extrude")
         
         try:
-            # 사용자 제안 방식 2: 벡터형 Extrude를 이용한 평면 생성
-            # 먼저 작은 선을 하나 긋고 이를 옆으로 길게 뽑아 면을 만듭니다.
-            frame = g.Frame.Create(origin, normal)
-            # 평면상에 가상의 엣지를 생성하기 위해 Circle의 일부를 사용하거나 
-            # 단순히 직선을 하나 생성 (여기서는 가장 안정적인 Circle 기반 채우기 방식 병행)
-            circle = g.Circle.Create(frame, MM(20000)) # 20m radius
+            # [v5.00] 회전 방지를 위해 정렬된 프레임 생성
+            ref = g.Direction.DirZ
+            if abs(normal.Z) > 0.9: ref = g.Direction.DirX
+            x_axis = g.Direction.Cross(normal, ref)
+            frame = g.Frame.Create(origin, normal, x_axis)
+            
+            circle = g.Circle.Create(frame, MM(20000)) 
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            # [v4.99] Fill이 실패할 경우를 대비하여 DatumPlane 방식도 이중으로 준비
             try:
                 Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
                 print("   [DEBUG 3] Fill success")
