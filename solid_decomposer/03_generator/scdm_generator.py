@@ -63,12 +63,21 @@ initialize_api()
 if 'ALL_CUTTERS' not in globals():
     ALL_CUTTERS = []
 
+def get_all_bodies_recursive(part, body_list):
+    '''모든 컴포넌트를 뒤져서 바디를 수집'''
+    for body in part.Bodies:
+        body_list.append(body)
+    for comp in part.Components:
+        if comp.Template:
+            get_all_bodies_recursive(comp.Template, body_list)
+
 def make_all_bodies_independent():
     '''패턴/인스턴스로 공유된 바디를 모두 독립화'''
     try:
         root = GetRootPart()
-        bodies = list(root.GetAllBodies())
-        for body in bodies:
+        all_bodies = []
+        get_all_bodies_recursive(root, all_bodies)
+        for body in all_bodies:
             try:
                 # 바디 복사 후 원본 삭제 방식의 독립화
                 shape_copy = body.Shape.Copy()
@@ -80,7 +89,8 @@ def make_all_bodies_independent():
 
 def get_matching_bodies(target_base):
     '''이름 기반 3단계 매칭'''
-    all_bodies = GetRootPart().GetAllBodies()
+    all_bodies = []
+    get_all_bodies_recursive(GetRootPart(), all_bodies)
     matched = []
     for body in all_bodies:
         b_name = body.Name
