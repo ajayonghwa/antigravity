@@ -14,7 +14,6 @@ class SCDMGenerator:
         for i, plan in enumerate(plan_list):
             strat = plan.get("strategy", "").upper()
             body = plan.get("body_name", "Unknown")
-            
             safe_body = body.replace("'", "\\'")
             
             if strat == "OGRID":
@@ -27,31 +26,31 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += f"apply_split_plane('{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
-        # [v4.22] 제너레이터도 동일한 Placement 매트릭스 변환 로직을 사용해 월드 좌표 바디를 완벽 매칭합니다.
         script_template = f"""# -*- coding: utf-8 -*-
 import math
 
 ALL_CUTTERS = []
 
 def get_all_bodies_recursive(part, body_list):
-    for body in part.Bodies:
-        body_list.append(body)
+    try:
+        # GetDescendants is the most robust way in V22
+        for b in part.GetDescendants[IDesignBody]():
+            body_list.append(b)
+        return
+    except: pass
+    for body in part.Bodies: body_list.append(body)
     for comp in part.Components:
         if hasattr(comp, "Template") and comp.Template:
             get_all_bodies_recursive(comp.Template, body_list)
 
 def get_matching_bodies(target_name):
-    try:
-        target_unicode = target_name.decode('utf-8')
-    except:
-        target_unicode = target_name
-        
+    try: target_unicode = target_name.decode('utf-8')
+    except: target_unicode = target_name
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
     matched = []
     for b in all_bodies:
         if b.Name == target_unicode or b.Name.startswith(target_unicode + u"_"):
-            # 매칭된 바디가 컴포넌트 템플릿의 로컬 바디일 경우, 인스턴스/월드 여부와 관계없이 이름으로 찾습니다.
             matched.append(b)
     return matched
 
@@ -59,20 +58,14 @@ def _get_target_cutter_comp(target_body_name):
     root = GetRootPart()
     try: t_name = target_body_name.decode('utf-8')
     except: t_name = target_body_name
-    
     safe_name = "".join(c for c in t_name if c.isalnum() or c == u"_")
     comp_name = "CUTTERS_FOR_" + safe_name
-    
     for comp in root.Components:
         if comp.Name == comp_name: return comp
-        
     try:
         new_part = Part.Create(root.Document, comp_name)
-        new_comp = Component.Create(root, new_part)
-        return new_comp
-    except Exception as e:
-        print("    [WARN] Failed to create component: " + str(e))
-        return root
+        return Component.Create(root, new_part)
+    except: return root
 
 def _safe_split(target_body, cutter_face):
     try:
@@ -85,91 +78,71 @@ def _safe_split(target_body, cutter_face):
     except: pass
     return False
 
-def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
-    try:
-        root = GetRootPart()
-        r = getattr(target_body.Shape, "Range", getattr(target_body, "Box", getattr(target_body, "BoundingBox", None)))
-        extrude_dist = 2.0
-        if r:
-            diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
-            extrude_dist = max(diag * 4.0, 0.1)
-        
-        shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
-                                      origin_pt.Y - direction.Y * extrude_dist/2, 
-                                      origin_pt.Z - direction.Z * extrude_dist/2)
-        
-        frame = Frame.Create(shifted_origin, direction)
-        circle = Circle.Create(frame, radius)
-        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        
-        sel = Selection.Create(design_curve)
-        try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
-        except: 
-            try: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
-            except: pass
-        
-        tool = None
-        for b in root.Bodies:
-            if getattr(b, 'Shape', None) and "Cylinder" in b.Shape.Geometry.GetType().Name:
-                if b.Name.startswith("Solid") or b.Name.startswith("솔리드"):
-                    tool = b
-                    
-        if not tool and root.Bodies.Count > 0:
-            tool = root.Bodies[-1]
-            
-        design_curve.Delete()
-        
-        if tool:
-            tool.Name = name
-            return tool
-        return None
-    except: return None
-
 def apply_ogrid(target_name, center, axis, offset, idx):
-    global ALL_CUTTERS
-    try: print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name.decode('utf-8')))
-    except: print(" -> Step {{0}}: O-GRID".format(idx))
-        
+    print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name))
     targets = get_matching_bodies(target_name)
-    if not targets:
-        print("    [ERROR] Could not find target body")
-        return
+    if not targets: return
 
     origin_pt = Point.Create(center[0], center[1], center[2])
     direction = Direction.Create(axis[0], axis[1], axis[2])
+    root = GetRootPart()
 
     for i, target in enumerate(targets):
-        cutter_name = "Cutter_OGrid_Hole_{{0}}_{{1}}".format(idx, i)
-        tool = _create_cylindrical_cutter(target, origin_pt, direction, offset, cutter_name)
-        if tool:
-            ALL_CUTTERS.append(tool)
-            cutter_face = None
-            for face in tool.Faces:
-                if "Cylinder" in face.Shape.Geometry.GetType().Name:
-                    cutter_face = face
-                    break
-            if not cutter_face: cutter_face = tool.Faces[0]
+        try:
+            # [무적 로직] 실행 전 바디 목록 캡처
+            bodies_before = list(root.GetDescendants[IDesignBody]())
             
-            # [v4.22] 템플릿 바디를 자르면 조립품 전체가 업데이트됩니다.
-            if _safe_split(target, cutter_face):
-                print("    [OK] Split Success")
-            else:
-                print("    [FAIL] Split failed")
+            r = getattr(target.Shape, "Range", getattr(target, "Box", getattr(target, "BoundingBox", None)))
+            extrude_dist = 2.0
+            if r:
+                diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
+                extrude_dist = max(diag * 4.0, 0.1)
+            
+            shifted_origin = Point.Create(origin_pt.X - axis[0] * extrude_dist/2, 
+                                          origin_pt.Y - axis[1] * extrude_dist/2, 
+                                          origin_pt.Z - axis[2] * extrude_dist/2)
+            frame = Frame.Create(shifted_origin, direction)
+            circle = Circle.Create(frame, offset)
+            design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
+            
+            # 실린더 생성
+            sel = Selection.Create(design_curve)
+            try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
+            except: 
+                try: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
+                except: pass
+            
+            # 새 바디 찾기
+            bodies_after = list(root.GetDescendants[IDesignBody]())
+            new_bodies = [b for b in bodies_after if b not in bodies_before]
+            
+            if new_bodies:
+                tool = new_bodies[0]
+                tool.Name = "Cutter_OGrid_{{0}}_{{1}}".format(idx, i)
                 
-            try:
-                parent_comp = _get_target_cutter_comp(target.Name)
-                tool.SetParent(parent_comp)
-            except: pass
+                cutter_face = None
+                for face in tool.Faces:
+                    if "Cylinder" in face.Shape.Geometry.GetType().Name:
+                        cutter_face = face
+                        break
+                if not cutter_face: cutter_face = tool.Faces[0]
+                
+                if _safe_split(target, cutter_face):
+                    print("    [OK] Split Success")
+                else:
+                    print("    [FAIL] Split failed")
+                
+                # 컴포넌트 이동
+                try: tool.SetParent(_get_target_cutter_comp(target.Name))
+                except: pass
+            
+            design_curve.Delete()
+        except Exception as e: print("    [ERROR] " + str(e))
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
-    global ALL_CUTTERS
-    try: print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name.decode('utf-8')))
-    except: print(" -> Step {{0}}: {{1}}".format(idx, strategy))
-    
+    print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name))
     targets = get_matching_bodies(target_name)
-    if not targets:
-        print("    [ERROR] Could not find target body")
-        return
+    if not targets: return
     
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
@@ -178,7 +151,8 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
 
     for i, target in enumerate(targets):
         try:
-            # 템플릿 바디의 BoundingBox 크기를 기준으로 거대한 커터를 생성
+            bodies_before = list(root.GetDescendants[IDesignBody]())
+            
             r = getattr(target.Shape, "Range", getattr(target, "Box", getattr(target, "BoundingBox", None)))
             huge_radius = 5.0
             if r:
@@ -186,34 +160,25 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
             
             circle_geom = Circle.Create(frame, huge_radius)
             design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-            
             Fill.Execute(Selection.Create(design_curve))
             
-            tool = None
-            for b in root.Bodies:
-                if getattr(b, 'Shape', None) and "Plane" in b.Shape.Geometry.GetType().Name:
-                    if b.Name.startswith("Surface") or b.Name.startswith("서피스"):
-                        tool = b
-            if not tool and root.Bodies.Count > 0:
-                tool = root.Bodies[-1]
+            bodies_after = list(root.GetDescendants[IDesignBody]())
+            new_bodies = [b for b in bodies_after if b not in bodies_before]
             
-            if tool:
+            if new_bodies:
+                tool = new_bodies[0]
                 tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
-                ALL_CUTTERS.append(tool)
                 
-                # 템플릿 바디를 직접 자릅니다.
                 if _safe_split(target, tool.Faces[0]):
                     print("    [OK] Split Success")
                 else:
                     print("    [FAIL] Split failed")
-                    
-                try:
-                    parent_comp = _get_target_cutter_comp(target.Name)
-                    tool.SetParent(parent_comp)
+                
+                try: tool.SetParent(_get_target_cutter_comp(target.Name))
                 except: pass
                 
             design_curve.Delete()
-        except: pass
+        except Exception as e: print("    [ERROR] " + str(e))
 
 def finalize():
     print(" --- Finished ---")
