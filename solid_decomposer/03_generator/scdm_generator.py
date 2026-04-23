@@ -102,10 +102,8 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1.0] Start ogrid for {0}".format(targets[0].Name))
-        # [v5.15] 사용자 환경에서 검증된 전역 이름 직접 호출 방식으로 복귀
         origin_pt = Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
         direction = Direction.Create(axis[0], axis[1], axis[2])
-        print("   [DEBUG 1.2] Point/Direction created")
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
@@ -114,13 +112,12 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         try:
             temp_frame = Frame.Create(origin_pt, direction)
             circle = Circle.Create(temp_frame, MM(offset*1000))
-            # [v5.15] 잘 작동하던 전역 DesignCurve 호출 복구
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-            print("   [DEBUG 1.4] DesignCurve created")
+            print("   [DEBUG 1.4] DesignCurve created: {0}".format(dc.Name))
             
-            # [v5.15] 오직 Selection만 네임스페이스 충돌 방지를 위해 전체 경로 사용
             sel_class = SpaceClaim.Api.V22.Scripting.Selection.Selection
-            sel_obj = sel_class.Create(dc.Edges[0])
+            # [v5.16] dc.Edges[0] 대신 dc 객체 자체를 전달하여 속성 에러 방지
+            sel_obj = sel_class.Create(dc)
             
             options = ExtrudeEdgeOptions()
             ExtrudeEdges.Execute(sel_obj, direction, MM(10000), options, None)
@@ -134,7 +131,9 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         if new_b:
             try: 
                 target_sel = sel_class.Create(targets)
-                cutter_sel = sel_class.Create(new_b.Faces[0])
+                # [v5.16] 커터 바디의 면을 더 확실하게 선택
+                cutter_faces = new_b.GetDescendants[IDesignFace]()
+                cutter_sel = sel_class.Create(cutter_faces)
                 SplitBody.ByCutter(target_sel, cutter_sel, True, None)
                 print("   [DEBUG 3.0] SplitBody success")
             except Exception as se: print("   [WARN] Split failed: " + str(se))
@@ -162,8 +161,9 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
             sel_class = SpaceClaim.Api.V22.Scripting.Selection.Selection
+            # [v5.16] dc 자체를 전달
             try:
-                Fill.Execute(sel_class.Create(dc.Edges[0]), None, None)
+                Fill.Execute(sel_class.Create(dc), None, None)
                 print("   [DEBUG 2.0] Fill success")
             except:
                 plane_obj = Plane.Create(temp_frame)
@@ -178,7 +178,8 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             if new_b:
                 try: 
                     target_sel = sel_class.Create(targets)
-                    cutter_sel = sel_class.Create(new_b.Faces[0])
+                    cutter_faces = new_b.GetDescendants[IDesignFace]()
+                    cutter_sel = sel_class.Create(cutter_faces)
                     SplitBody.ByCutter(target_sel, cutter_sel, True, None)
                     print("   [DEBUG 3.0] SplitBody success")
                 except Exception as se: print("   [WARN] Split failed: " + str(se))
