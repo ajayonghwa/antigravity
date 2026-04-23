@@ -124,7 +124,18 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
             circle = Circle.Create(temp_frame, MM(offset*1000))
             
             root = Window.ActiveWindow.Document.MainPart
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            
+            # [v5.19] ITrimmedCurve 형변환 에러 해결: .AsTrimmedCurve() 명시적 호출
+            try:
+                geom = CurveSegment.Create(circle).AsTrimmedCurve()
+                dc = DesignCurve.Create(root, geom)
+            except:
+                try:
+                    dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+                except:
+                    dc = DesignCurve.Create(root, circle.AsTrimmedCurve())
+            
+            print("   [DEBUG] DesignCurve created")
             
             tool_body = None
             bodies_before = list(root.GetDescendants[IDesignBody]())
