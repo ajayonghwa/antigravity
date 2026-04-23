@@ -53,12 +53,14 @@ import clr
 # [v5.01] 명시적 참조 및 네임스페이스 충돌 방지
 try:
     clr.AddReference("SpaceClaim.Api.V22")
+    from SpaceClaim.Api.V22 import Application, Window, Selection, MM
     import SpaceClaim.Api.V22.Geometry as g
     import SpaceClaim.Api.V22.Modeler as m
     import SpaceClaim.Api.V22.Scripting.Selection as sel
     import SpaceClaim.Api.V22.Scripting.Commands as cmd
     import SpaceClaim.Api.V22.Scripting.Helpers as help
-except: pass
+except Exception as ie:
+    print("   [CRITICAL] Import failed: " + str(ie))
 
 BODY_COMP_MAP = {}
 
@@ -66,23 +68,28 @@ def get_matching_bodies(body_b64):
     try: t_clean = base64.b64decode(body_b64).decode('utf-8').lower().strip()
     except: t_clean = body_b64.lower().strip()
     import re
-    root = Application.GetActiveDocument().MainPart
-    all_b = root.GetDescendants[m.IDesignBody]()
-    pattern = re.compile("^" + re.escape(t_clean) + r"\\\\d*$")
-    matches = [b for b in all_b if pattern.match(b.Name.lower().replace(" ", "")) or b.Name.lower() == t_clean]
-    if matches: print("   [INFO] Found {0} targets for '{1}'".format(len(matches), t_clean))
-    return matches
+    try:
+        root = Application.GetActiveDocument().MainPart
+        all_b = root.GetDescendants[m.IDesignBody]()
+        pattern = re.compile("^" + re.escape(t_clean) + r"\\d*$")
+        matches = [b for b in all_b if pattern.match(b.Name.lower().replace(" ", "")) or b.Name.lower() == t_clean]
+        if matches: print("   [INFO] Found {0} targets for '{1}'".format(len(matches), t_clean))
+        return matches
+    except Exception as ge:
+        print("   [ERROR] get_matching_bodies failed: " + str(ge))
+        return []
 
 def _init_comp(name_b64, body_idx):
-    root = Application.GetActiveDocument().MainPart
-    comp_name = "CUTTERS_{0}".format(body_idx)
-    target_comp = next((c for c in root.Components if c.Name == comp_name), None)
-    if not target_comp:
-        try:
+    try:
+        root = Application.GetActiveDocument().MainPart
+        comp_name = "CUTTERS_{0}".format(body_idx)
+        target_comp = next((c for c in root.Components if c.Name == comp_name), None)
+        if not target_comp:
             target_part = m.Part.Create(root.Document, comp_name)
             target_comp = m.Component.Create(root, target_part)
-        except: pass
-    BODY_COMP_MAP[body_idx] = target_comp
+        BODY_COMP_MAP[body_idx] = target_comp
+    except Exception as ce:
+        print("   [ERROR] _init_comp failed: " + str(ce))
 
 def _move_to_comp(obj, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
