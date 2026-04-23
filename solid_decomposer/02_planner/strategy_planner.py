@@ -56,8 +56,8 @@ class StrategyPlanner:
             plans.extend(self._plan_boss())
         elif classification == "PIPE_JUNCTION":
             plans.extend(self._plan_junction())
-        elif classification == "AXISYMMETRIC":
-            plans.extend(self._plan_axisymmetric())
+        elif classification == "THICK_WALL_CYLINDER":
+            plans.extend(self._plan_thick_wall())
         elif classification == "PRISMATIC":
             plans.extend(self._plan_prismatic())
         else:
@@ -118,6 +118,13 @@ class StrategyPlanner:
             if is_boss and len(self.planes) > len(self.all_curved):
                 return "PROTRUDING_BOSS"
 
+            # 다공판(Perforated Plate) 우선 판별 (구멍이 3개 이상이면 파이프가 아님)
+            plane_area = sum([f.get("area", 0) for f in self.planes])
+            cyl_area = sum([f.get("area", 0) for f in self.all_curved])
+            if (plane_area > cyl_area * 1.5 or len(g["holes"]) > 2):
+                 return "PERFORATED_PLATE"
+
+            # 단일 축 파이프/보스 판별
             if len(radii) >= 2:
                 r_max = max(radii)
                 r_min = min(radii)
@@ -125,14 +132,8 @@ class StrategyPlanner:
                     ratio = r_max / r_min
                     if ratio < 1.05: # 외경/내경 차이가 5% 미만
                         return "THIN_WALL_CYLINDER"
-                    elif ratio > 1.5:
-                        return "THICK_WALL_CYLINDER" # Axial + Radial Offset
-
-            # 평면이 지배적이면 다공판일 수도 있음 (한 방향 구멍만 있는 경우)
-            plane_area = sum([f.get("area", 0) for f in self.planes])
-            cyl_area = sum([f.get("area", 0) for f in self.all_curved])
-            if plane_area > cyl_area * 2 and len(g["holes"]) > 2:
-                 return "PERFORATED_PLATE"
+                    elif ratio > 1.2:
+                        return "THICK_WALL_CYLINDER" 
 
         return "AXISYMMETRIC"
 
@@ -177,6 +178,18 @@ class StrategyPlanner:
         groups = self._group_by_axis(self.all_curved)
         main_axis = groups[0]["axis"]
         return self._generate_cross_sectors(self.body_center, main_axis)
+
+    def _plan_thick_wall(self):
+        print(" - Thick-walled cylinder detected. Applying O-Grid + Sectors.")
+        plans = []
+        groups = self._group_by_axis(self.all_curved)
+        main_axis = groups[0]["axis"]
+        # 1. Sector
+        plans.extend(self._generate_cross_sectors(self.body_center, main_axis))
+        # 2. O-Grid for inner holes
+        for h in groups[0]["holes"]:
+            plans.extend(self._plan_ogrid_for_hole(h, main_axis))
+        return plans
 
     def _plan_perforated(self):
         print(" - Perforated plate detected. Applying H-Grid matrix.")
