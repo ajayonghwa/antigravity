@@ -12,7 +12,6 @@ class SCDMGenerator:
     def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
         execution_calls = ""
         print(f"\n[Generating Script: {output_name}]")
-        print(f" - Total plans to process: {len(plan_list)}")
         
         for i, plan in enumerate(plan_list):
             strat = plan.get("strategy", "").upper()
@@ -38,7 +37,6 @@ import clr
 import System
 import math
 
-# [1] API 로드 및 참조
 def initialize_api():
     try:
         clr.AddReference("SpaceClaim.Api.V22")
@@ -46,49 +44,35 @@ def initialize_api():
         from SpaceClaim.Api.V22.Modeler import *
         from SpaceClaim.Api.V22.Commands import *
         return True
-    except:
-        return False
+    except: return False
 
 initialize_api()
 
-# 전역 커터 목록
 if 'ALL_CUTTERS' not in globals():
     ALL_CUTTERS = []
 
 def get_all_bodies_recursive(part, body_list):
-    '''모든 컴포넌트를 탐색하여 바디 수집'''
-    for body in part.Bodies:
-        body_list.append(body)
+    for body in part.Bodies: body_list.append(body)
     for comp in part.Components:
-        if comp.Template:
-            get_all_bodies_recursive(comp.Template, body_list)
-
-def make_all_bodies_independent():
-    try:
-        root = GetRootPart()
-        all_bodies = []
-        get_all_bodies_recursive(root, all_bodies)
-        for body in all_bodies:
-            try:
-                shape_copy = body.Shape.Copy()
-                new_body = DesignBody.Create(root, body.Name + "_indep", shape_copy)
-                body.Delete()
-            except: pass
-    except: pass
+        if comp.Template: get_all_bodies_recursive(comp.Template, body_list)
 
 def get_matching_bodies(target_name):
-    '''이름이 정확히 일치하는 바디 탐색'''
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
-    matched = [b for b in all_bodies if b.Name == target_name]
-    return matched
+    return [b for b in all_bodies if b.Name == target_name]
 
-def _create_cylindrical_cutter(origin_pt, direction, radius):
-    '''원통형 커터 생성 (V22 최적화)'''
+def _get_safe_range(obj):
+    '''바디 또는 파트의 크기 정보를 안전하게 가져옴'''
+    for attr in ['Range', 'Box', 'BoundingBox', 'Extent']:
+        if hasattr(obj, attr):
+            return getattr(obj, attr)
+    return None
+
+def _create_cylindrical_cutter(target_body, origin_pt, direction, radius):
     try:
         root = GetRootPart()
-        # V22 호환성을 위해 다양한 속성명 시도
-        bbox = getattr(root, 'Range', getattr(root, 'Extent', getattr(root, 'BoundingBox', None)))
+        # 대상 바디 크기 기준으로 커터 길이 결정
+        bbox = _get_safe_range(target_body)
         if bbox:
             diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
             extrude_dist = max(diag * 2.0, 0.1)
@@ -112,87 +96,67 @@ def _create_cylindrical_cutter(origin_pt, direction, radius):
         
         bodies_after = []
         get_all_bodies_recursive(root, bodies_after)
-        
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         design_curve.Delete()
-        
         return new_bodies[0] if new_bodies else None
-    except Exception as e:
-        print("Cutter Creation Error: " + str(e))
-        return None
+    except: return None
 
 def apply_ogrid(target_name, center, axis, offset, idx):
     global ALL_CUTTERS
     print(" -> Step {{0}}: O-GRID splitting for {{1}}".format(idx, target_name))
-    
+    targets = get_matching_bodies(target_name)
+    if not targets: return
+
     origin_pt = Point.Create(center[0], center[1], center[2])
     direction = Direction.Create(axis[0], axis[1], axis[2])
-    
-    targets = get_matching_bodies(target_name)
-    if not targets:
-        print("    !! Body not found: {{0}}".format(target_name))
-        return
 
     for i, target in enumerate(targets):
-        tool = _create_cylindrical_cutter(origin_pt, direction, offset)
+        tool = _create_cylindrical_cutter(target, origin_pt, direction, offset)
         if tool:
-            tool.Name = "Cutter_OGrid_" + str(idx)
             ALL_CUTTERS.append(tool)
-            try:
-                SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
-                print("    [OK] Split successful.")
-            except Exception as e:
-                print("    [FAIL] Split failed: " + str(e))
+            try: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+            except: pass
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
     print(" -> Step {{0}}: {{1}} splitting for {{2}}".format(idx, strategy, target_name))
+    targets = get_matching_bodies(target_name)
+    if not targets: return
     
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     frame = Frame.Create(origin, normal)
     root = GetRootPart()
-    
-    try:
-        # 모델 크기에 비례한 충분히 큰 커터 생성
-        bbox = getattr(root, 'Range', getattr(root, 'Extent', getattr(root, 'BoundingBox', None)))
-        if bbox:
-            diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
-            huge_radius = diag * 2.0
-        else:
+
+    for target in targets:
+        try:
+            bbox = _get_safe_range(target)
             huge_radius = 1.0
+            if bbox:
+                huge_radius = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2) * 1.5
             
-        circle_geom = Circle.Create(frame, huge_radius)
-        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        
-        bodies_before = []
-        get_all_bodies_recursive(root, bodies_before)
-        
-        Fill.Execute(Selection.Create(design_curve))
-        
-        bodies_after = []
-        get_all_bodies_recursive(root, bodies_after)
-        new_bodies = [b for b in bodies_after if b not in bodies_before]
-        
-        if new_bodies:
-            tool = new_bodies[0]
-            tool.Name = "Cutter_Plane_" + str(idx)
-            ALL_CUTTERS.append(tool)
-            targets = get_matching_bodies(target_name)
-            for target in targets:
-                try: 
-                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
-                    print("    [OK] Split successful.")
-                except Exception as e:
-                    print("    [FAIL] Split failed: " + str(e))
-        
-        design_curve.Delete()
-    except Exception as e:
-        print("    [ERROR] Plane split error: " + str(e))
+            circle_geom = Circle.Create(frame, huge_radius)
+            design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
+            
+            bodies_before = []
+            get_all_bodies_recursive(root, bodies_before)
+            Fill.Execute(Selection.Create(design_curve))
+            
+            bodies_after = []
+            get_all_bodies_recursive(root, bodies_after)
+            new_bodies = [b for b in bodies_after if b not in bodies_before]
+            
+            if new_bodies:
+                tool = new_bodies[0]
+                ALL_CUTTERS.append(tool)
+                try: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+                except: pass
+            design_curve.Delete()
+        except: pass
 
 def finalize():
     global ALL_CUTTERS
-    print(" -> Finalizing: Cleaning cutters and sharing topology...")
+    print(" -> Finalizing...")
     for cutter in ALL_CUTTERS:
         try: cutter.Delete()
         except: pass
@@ -200,7 +164,7 @@ def finalize():
         from SpaceClaim.Api.V22.Commands import PartSharedTopology
         PartSharedTopology.Share(GetRootPart(), None)
     except: pass
-    print(" --- Decomposition Workflow Finished ---")
+    print(" --- Finished ---")
 
 # --- EXECUTION ---
 {execution_calls}
