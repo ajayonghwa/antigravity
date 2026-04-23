@@ -74,7 +74,45 @@ class StrategyPlanner:
                     if bbox.zmin + eps < z < bbox.zmax - eps:
                         candidates.append((cq.Vector(0, 0, z), cq.Vector(0, 0, 1), "STEP", 1.1))
 
-        return candidates
+        return self._unify_candidates(candidates)
+
+    def _unify_candidates(self, candidates):
+        """Merge candidates that are too close to each other to prevent clustering"""
+        if not candidates: return []
+        
+        unified = []
+        # Group by normal (X, Y, Z)
+        for norm in [cq.Vector(1,0,0), cq.Vector(0,1,0), cq.Vector(0,0,1)]:
+            group = [c for c in candidates if abs(c[1].dot(norm)) > 0.9]
+            if not group: continue
+            
+            # Sort by coordinate along the normal
+            if norm.x > 0.9: group.sort(key=lambda x: x[0].x)
+            elif norm.y > 0.9: group.sort(key=lambda x: x[0].y)
+            else: group.sort(key=lambda x: x[0].z)
+            
+            # Merge logic
+            if not group: continue
+            current_cluster = [group[0]]
+            
+            threshold = 5.0 # Minimum 5mm distance between parallel planes
+            
+            for next_cand in group[1:]:
+                dist = 0
+                if norm.x > 0.9: dist = abs(next_cand[0].x - current_cluster[-1][0].x)
+                elif norm.y > 0.9: dist = abs(next_cand[0].y - current_cluster[-1][0].y)
+                else: dist = abs(next_cand[0].z - current_cluster[-1][0].z)
+                
+                if dist < threshold:
+                    current_cluster.append(next_cand)
+                else:
+                    # Pick the best from the cluster (highest weight)
+                    unified.append(max(current_cluster, key=lambda x: x[3]))
+                    current_cluster = [next_cand]
+            
+            unified.append(max(current_cluster, key=lambda x: x[3]))
+            
+        return unified
 
     def _evaluate_candidate(self, body, candidate):
         origin, normal, ftype, weight = candidate
