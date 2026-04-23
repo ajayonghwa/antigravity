@@ -3,14 +3,16 @@ import json
 import os
 import clr
 
-# [v4.49] SCDM(Meter) -> Planner(mm) 단위 변환 및 절대 경로 유지
+# [v4.50] 스페이스클레임 내부 글로벌 함수 및 클래스에 직접 접근 (가장 확실한 방법)
 try:
     clr.AddReference("SpaceClaim.Api.V22")
-    import SpaceClaim.Api.V22 as SCDM
-    import SpaceClaim.Api.V22.Modeler as Modeler
-    import SpaceClaim.Api.V22.Geometry as Geometry
+    from SpaceClaim.Api.V22 import *
+    from SpaceClaim.Api.V22.Modeler import *
+    from SpaceClaim.Api.V22.Geometry import *
+    from SpaceClaim.Api.V22.Scripting import *
+    print(" [STEP 1] API V22 Namespace Loaded")
 except Exception as e:
-    print(" - [ERROR] API Mapping Failed: " + str(e))
+    print(" [ERROR] API Load Failed: " + str(e))
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
@@ -19,7 +21,6 @@ def get_python_matrix_from_obj(m):
     res = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     try:
         t = m.Translation
-        # [v4.49] 미터 -> mm 변환
         res[0][3] = t.X * 1000.0; res[1][3] = t.Y * 1000.0; res[2][3] = t.Z * 1000.0
         r = m.Rotation
         res[0][0]=r.M11; res[0][1]=r.M12; res[0][2]=r.M13
@@ -30,7 +31,6 @@ def get_python_matrix_from_obj(m):
 
 def get_face_data(face, matrix):
     f_id = face.GetHashCode()
-    # [v4.49] 면적 등 수치 데이터 mm 단위 변환
     data = {"id": f_id, "type": "Unknown", "area": face.Area * 1000000.0, "box": {"min": [0,0,0], "max": [0,0,0]}, "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False}
     try:
         shape = face.Shape
@@ -38,8 +38,7 @@ def get_face_data(face, matrix):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
-            bbox = face.GetBoundingBox(Geometry.Matrix.Identity)
-            # [v4.49] 좌표 mm 변환
+            bbox = face.GetBoundingBox(Matrix.Identity)
             data["origin"] = [bbox.Center.X * 1000.0, bbox.Center.Y * 1000.0, bbox.Center.Z * 1000.0]
             f = geom.Frame
             data["axis"] = [
@@ -56,18 +55,32 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Unit-Aware Extraction (v4.49) ---")
+    print("--- SCDM Robust Extraction (v4.50) ---")
     all_bodies_data = []
-    try: root = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document)
-    except: return [], [], "Unknown"
     
+    # [STEP 2] Root Part 획득
     try:
-        bodies = list(SCDM.Window.ActiveWindow.GetAllOccurrences[SCDM.IDesignBody]())
-        if not bodies: bodies = list(root.GetDescendants[SCDM.IDesignBody]())
-    except:
-        bodies = list(root.GetDescendants[SCDM.IDesignBody]())
+        root = GetRootPart()
+        print(" [STEP 2] Root Part: {0}".format(root.Name))
+    except Exception as e:
+        print(" [ERROR] Failed to get Root Part: " + str(e))
+        return [], [], "Unknown"
     
-    print(" - Found {0} bodies".format(len(bodies)))
+    # [STEP 3] 바디 탐색 (3단계)
+    bodies = []
+    try:
+        bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
+        if not bodies: 
+            print(" [INFO] GetAllOccurrences found 0, trying GetDescendants...")
+            bodies = list(root.GetDescendants[IDesignBody]())
+        if not bodies:
+            print(" [INFO] GetDescendants found 0, trying root.Bodies...")
+            bodies = list(root.Bodies)
+    except Exception as e:
+        print(" [DEBUG] Search Error: " + str(e))
+        bodies = list(root.GetDescendants[IDesignBody]())
+    
+    print(" [STEP 3] Found {0} bodies".format(len(bodies)))
 
     for i, body in enumerate(bodies):
         matrix_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
@@ -84,7 +97,7 @@ def extract_geometry():
         actual_name = body.Name
         print(" - [OK] {0} (Pos: {1:.2f}, {2:.2f}, {3:.2f} mm)".format(actual_name, matrix_py[0][3], matrix_py[1][3], matrix_py[2][3]))
         
-        body_data = {"body_index": i, "body_name": actual_name, "original_name": body.Name, "volume": body.Shape.Volume * 1000000000.0, "faces": []}
+        body_data = {"body_index": i, "body_name": actual_name, "original_name": body.Name, "volume": body.Shape.Volume * 1e9, "faces": []}
         for j, face in enumerate(list(body.Faces)):
             try:
                 fdata = get_face_data(face, matrix_py)
@@ -99,5 +112,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Geometry data saved in mm units.")
+    print("\n[FINISH] Geometry data saved successfully.")
 except Exception as e: print("\n[FATAL] " + str(e))
