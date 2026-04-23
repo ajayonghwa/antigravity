@@ -102,33 +102,38 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1.0] Start ogrid for {0}".format(targets[0].Name))
-        # [v5.13] API Shield: 모든 호출에 절대 경로 강제 적용
-        g = SpaceClaim.Api.V22.Geometry
-        m = SpaceClaim.Api.V22.Modeler
-        s = SpaceClaim.Api.V22.Scripting
+        # [v5.14] Atomic Class Extraction: 네임스페이스 충돌을 뚫고 클래스 객체 직접 추출
+        g_mod = SpaceClaim.Api.V22.Geometry
+        m_mod = SpaceClaim.Api.V22.Modeler
+        s_mod = SpaceClaim.Api.V22.Scripting
+        c_mod = SpaceClaim.Api.V22.Scripting.Commands
         
-        origin_pt = g.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
-        print("   [DEBUG 1.1] Point created")
-        direction = g.Direction.Create(axis[0], axis[1], axis[2])
-        print("   [DEBUG 1.2] Direction created")
+        origin_pt = getattr(g_mod, "Point").Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+        direction = getattr(g_mod, "Direction").Create(axis[0], axis[1], axis[2])
+        print("   [DEBUG 1.2] Geometry factory ready")
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            temp_frame = g.Frame.Create(origin_pt, direction)
+            temp_frame = getattr(g_mod, "Frame").Create(origin_pt, direction)
             print("   [DEBUG 1.3] Frame created")
-            circle = g.Circle.Create(temp_frame, MM(offset*1000))
-            dc = m.DesignCurve.Create(root, g.CurveSegment.Create(circle))
+            circle = getattr(g_mod, "Circle").Create(temp_frame, MM(offset*1000))
+            
+            # [v5.14] DesignCurve 클래스를 직접 추출하여 호출
+            dc_class = getattr(m_mod, "DesignCurve")
+            cs_class = getattr(g_mod, "CurveSegment")
+            dc = dc_class.Create(root, cs_class.Create(circle))
             print("   [DEBUG 1.4] DesignCurve created")
             
-            sel_class = s.Selection.Selection
+            sel_class = getattr(getattr(s_mod, "Selection"), "Selection")
             sel_obj = sel_class.Create(dc.Edges[0])
             
+            # [v5.14] 명령 클래스들도 직접 추출
+            extrude_cmd = getattr(c_mod, "ExtrudeEdges")
             options = ExtrudeEdgeOptions()
-            # [v5.13] 사용자 Record 구문 정밀 반영
-            ExtrudeEdges.Execute(sel_obj, direction, MM(10000), options, None)
+            extrude_cmd.Execute(sel_obj, direction, MM(10000), options, None)
             print("   [DEBUG 2.0] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] Sub-step failed: " + str(ce))
@@ -138,10 +143,10 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         new_b = next((b for b in bodies_after if b not in bodies_before), None)
         if new_b:
             try: 
-                # [v5.13] 사용자 성공 구문 반영: SplitBody.ByCutter
+                split_cmd = getattr(c_mod, "SplitBody")
                 target_sel = sel_class.Create(targets)
                 cutter_sel = sel_class.Create(new_b.Faces[0])
-                SplitBody.ByCutter(target_sel, cutter_sel, True, None)
+                split_cmd.ByCutter(target_sel, cutter_sel, True, None)
                 print("   [DEBUG 3.0] SplitBody success")
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
@@ -155,30 +160,39 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1.0] Start split_plane for {0}".format(targets[0].Name))
-        g = SpaceClaim.Api.V22.Geometry
-        m = SpaceClaim.Api.V22.Modeler
-        s = SpaceClaim.Api.V22.Scripting
+        g_mod = SpaceClaim.Api.V22.Geometry
+        m_mod = SpaceClaim.Api.V22.Modeler
+        s_mod = SpaceClaim.Api.V22.Scripting
+        c_mod = SpaceClaim.Api.V22.Scripting.Commands
 
-        origin = g.Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
-        normal = g.Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        origin = getattr(g_mod, "Point").Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
+        normal = getattr(g_mod, "Direction").Create(normal_list[0], normal_list[1], normal_list[2])
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            temp_frame = g.Frame.Create(origin, normal)
-            circle = g.Circle.Create(temp_frame, MM(20000)) 
-            dc = m.DesignCurve.Create(root, g.CurveSegment.Create(circle))
+            temp_frame = getattr(g_mod, "Frame").Create(origin, normal)
+            circle = getattr(g_mod, "Circle").Create(temp_frame, MM(20000)) 
             
-            sel_class = s.Selection.Selection
+            dc_class = getattr(m_mod, "DesignCurve")
+            cs_class = getattr(g_mod, "CurveSegment")
+            dc = dc_class.Create(root, cs_class.Create(circle))
+            
+            sel_class = getattr(getattr(s_mod, "Selection"), "Selection")
             try:
-                Fill.Execute(sel_class.Create(dc.Edges[0]), None, None)
+                fill_cmd = getattr(c_mod, "Fill")
+                fill_cmd.Execute(sel_class.Create(dc.Edges[0]), None, None)
                 print("   [DEBUG 2.0] Fill success")
             except:
-                plane_obj = g.Plane.Create(temp_frame)
-                datum_plane = m.DatumPlane.Create(root, "Cutter_Plane", plane_obj)
-                SplitBody.ByCutter(sel_class.Create(targets), sel_class.Create(datum_plane), True, None)
+                plane_class = getattr(g_mod, "Plane")
+                plane_obj = plane_class.Create(temp_frame)
+                dp_class = getattr(m_mod, "DatumPlane")
+                datum_plane = dp_class.Create(root, "Cutter_Plane", plane_obj)
+                
+                split_cmd = getattr(c_mod, "SplitBody")
+                split_cmd.ByCutter(sel_class.Create(targets), sel_class.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
                 dc.Delete()
                 return
@@ -187,9 +201,10 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             new_b = next((b for b in bodies_after if b not in bodies_before), None)
             if new_b:
                 try: 
+                    split_cmd = getattr(c_mod, "SplitBody")
                     target_sel = sel_class.Create(targets)
                     cutter_sel = sel_class.Create(new_b.Faces[0])
-                    SplitBody.ByCutter(target_sel, cutter_sel, True, None)
+                    split_cmd.ByCutter(target_sel, cutter_sel, True, None)
                     print("   [DEBUG 3.0] SplitBody success")
                 except Exception as se: print("   [WARN] Split failed: " + str(se))
                 _move_to_comp(new_b, b_idx)
