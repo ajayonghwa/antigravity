@@ -50,11 +50,10 @@ import base64
 import json as pyjson
 import clr
 
-# [v5.04] Namespace Bypass Mastery
+# [v5.05] Import Refinement
 try:
     clr.AddReference("SpaceClaim.Api.V22")
-    import SpaceClaim.Api.V22 as api
-    from SpaceClaim.Api.V22 import Application, Window, Selection, MM
+    from SpaceClaim.Api.V22 import Application, Window, MM
     import SpaceClaim.Api.V22.Geometry as geom_mod
     import SpaceClaim.Api.V22.Modeler as model_mod
     import SpaceClaim.Api.V22.Scripting.Selection as sel_mod
