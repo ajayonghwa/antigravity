@@ -15,17 +15,16 @@ class SCDMGenerator:
             strat = plan.get("strategy", "").upper()
             body = plan.get("body_name", "Unknown")
             if strat == "OGRID":
-                execution_calls += f"apply_ogrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
+                execution_calls += f"apply_ogrid(r'{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
             elif strat == "CGRID":
-                execution_calls += f"apply_cgrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i})\n"
+                execution_calls += f"apply_cgrid(r'{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i})\n"
             elif strat == "RADIAL_OFFSET":
-                execution_calls += f"apply_radial_offset('{body}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i})\n"
+                execution_calls += f"apply_radial_offset(r'{body}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i})\n"
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan["split_plane"]
-                execution_calls += f"apply_split_plane('{body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
+                execution_calls += f"apply_split_plane(r'{body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
-        script_template = f"""
-# -*- coding: utf-8 -*-
+        script_template = f"""# -*- coding: utf-8 -*-
 import clr
 import System
 import math
@@ -62,7 +61,13 @@ def get_all_bodies_recursive(part, body_list):
 def get_matching_bodies(target_name):
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
-    return [b for b in all_bodies if b.Name == target_name or b.Name.startswith(target_name + "_")]
+    # [v4.15] 인코딩 문제를 우회하기 위해 startswith나 포함 관계로도 찾을 수 있도록 유연성 부여
+    matched = []
+    for b in all_bodies:
+        # 정확한 일치 또는 접미사가 붙은 형태(_1, _2 등)
+        if b.Name == target_name or b.Name.startswith(target_name + "_"):
+            matched.append(b)
+    return matched
 
 def _get_safe_range(obj):
     for attr in ['Range', 'Box', 'BoundingBox', 'Extent']:
@@ -71,7 +76,9 @@ def _get_safe_range(obj):
 
 def _get_target_cutter_comp(target_body_name):
     root = GetRootPart()
-    comp_name = "CUTTERS_FOR_" + target_body_name.split("_")[-1]
+    # 컴포넌트 이름에 특수문자나 한글이 들어가면 문제가 생길 수 있으므로 안전한 이름 사용
+    safe_name = "".join(c for c in target_body_name if c.isalnum() or c == "_")
+    comp_name = "CUTTERS_FOR_" + safe_name
     for comp in root.Components:
         if comp.Name == comp_name: return comp
     return SC_Component.Create(root, comp_name)
@@ -126,9 +133,11 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
 
 def apply_ogrid(target_name, center, axis, offset, idx):
     global ALL_CUTTERS
-    print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name))
+    print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name.encode('utf-8').decode('utf-8', 'ignore')))
     targets = get_matching_bodies(target_name)
-    if not targets: return
+    if not targets:
+        print("    [ERROR] Could not find target body: " + target_name.encode('utf-8').decode('utf-8', 'ignore'))
+        return
 
     origin_pt = SC_Point.Create(center[0], center[1], center[2])
     direction = SC_Direction.Create(axis[0], axis[1], axis[2])
@@ -148,13 +157,15 @@ def apply_ogrid(target_name, center, axis, offset, idx):
             if _safe_split(target, cutter_face):
                 print("    [OK] Split Success")
             else:
-                print("    [FAIL] Split failed for {{0}}".format(target.Name))
+                print("    [FAIL] Split failed for " + target.Name.encode('utf-8').decode('utf-8', 'ignore'))
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
-    print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name))
+    print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name.encode('utf-8').decode('utf-8', 'ignore')))
     targets = get_matching_bodies(target_name)
-    if not targets: return
+    if not targets:
+        print("    [ERROR] Could not find target body: " + target_name.encode('utf-8').decode('utf-8', 'ignore'))
+        return
     
     origin = SC_Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = SC_Direction.Create(normal_list[0], normal_list[1], normal_list[2])
@@ -203,6 +214,7 @@ def finalize():
 finalize()
 """
         output_path = os.path.join(self.output_dir, output_name)
-        with open(output_path, "w") as f:
+        # [v4.15] 파일 작성 시 utf-8 인코딩을 명시하여 한글 깨짐 방지
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(script_template)
         return output_path
