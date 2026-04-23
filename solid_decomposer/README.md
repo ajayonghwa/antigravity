@@ -55,15 +55,16 @@ solid_decomposer/
 
 ## 🛠️ 실행 방법 (Workflow)
 
-1. **SpaceClaim에서 기하 추출:**
-   - SpaceClaim 스크립트 창에서 `01_extractor/scdm_extractor.py`의 코드를 복사해서 실행합니다.
-   - `geometry_data_block.json` 파일이 생성됩니다.
-2. **전략 수립 및 스크립트 생성:**
-   - 터미널(가상환경 활성화)에서 `python main_run.py` (또는 통합 실행 스크립트)를 실행합니다.
-   - 플래너가 기하학적 특성을 분석하고 `04_scripts/scdm_decomposition_script.py` 파일을 생성합니다.
-3. **SpaceClaim에서 분할 실행:**
-   - 다시 SpaceClaim 스크립트 창으로 돌아와 `04_scripts/scdm_decomposition_script.py`의 코드를 복사해서 실행합니다.
-   - 기하가 기가 막히게 분할되는 모습을 감상합니다.
+### 방법 A. 원클릭 자동화 (추천 ⭐)
+복사/붙여넣기 없이 스페이스클레임 내에서 버튼 하나로 모든 과정을 처리합니다.
+1. **마스터 스크립트 설정**: `04_scripts/OneClick_Master_SCDM.py` 파일을 열어 상단의 `PROJECT_ROOT`와 `PYTHON_EXE` 경로를 본인의 환경에 맞게 수정합니다.
+2. **스페이스클레임 등록**: 수정된 코드를 SpaceClaim 스크립트 창에 붙여넣은 뒤 **'Publish(게시)'** 버튼을 눌러 그룹에 등록합니다.
+3. **실행**: 등록된 버튼을 클릭하면 **추출 -> 분석 -> 분할**이 자동으로 완료됩니다.
+
+### 방법 B. 단계별 수동 실행
+1. **SpaceClaim에서 기하 추출**: `01_extractor/scdm_extractor.py` 코드를 SpaceClaim에서 실행하여 `geometry_data_block.json`을 생성합니다.
+2. **전략 수립 및 스크립트 생성**: 터미널에서 `python main_run.py`를 실행하여 `04_scripts/scdm_decomposition_script.py`를 생성합니다.
+3. **SpaceClaim에서 분할 실행**: 생성된 스크립트를 SpaceClaim에서 실행하여 결과를 확인합니다.
 
 ## 📖 트러블슈팅
 API 참조 오류, SplitBody 4인자 에러 등 SpaceClaim 파이프라인 개발 중 겪을 수 있는 모든 이슈와 원인, 극복 방법은 `SCDM_Automation_Troubleshooting_Guide.md`에 아주 상세히 기록되어 있습니다. 코드를 수정하기 전 반드시 읽어보세요.
