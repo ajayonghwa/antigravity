@@ -6,7 +6,6 @@ if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
 def get_python_matrix_from_obj(m):
-    # [v4.37] Matrix 객체에서 데이터를 직접 추출
     res = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     try:
         if hasattr(m, "Translation"):
@@ -39,13 +38,9 @@ def get_face_data(face, matrix):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
-            
-            # [v4.37] EvaluateParameter(0,0)와 GetBoundingBox(Identity).Center를 교차 검증
             from SpaceClaim.Api.V22.Geometry import Matrix as ScMatrix
             bbox = face.GetBoundingBox(ScMatrix.Identity)
             data["origin"] = [bbox.Center.X, bbox.Center.Y, bbox.Center.Z]
-            
-            # 방향 벡터 (회전 행렬 적용)
             f = geom.Frame
             data["axis"] = [
                 matrix[0][0]*f.DirZ.X + matrix[0][1]*f.DirZ.Y + matrix[0][2]*f.DirZ.Z,
@@ -55,8 +50,6 @@ def get_face_data(face, matrix):
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
                 if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-        
-        from SpaceClaim.Api.V22.Geometry import Matrix as ScMatrix
         bbox = face.GetBoundingBox(ScMatrix.Identity)
         data["box"]["min"] = [bbox.Min.X, bbox.Min.Y, bbox.Min.Z]
         data["box"]["max"] = [bbox.Max.X, bbox.Max.Y, bbox.Max.Z]
@@ -64,46 +57,42 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM God Matrix Extraction (v4.37) ---")
+    print("--- SCDM Resilient Extraction (v4.38) ---")
     all_bodies_data = []
     root = GetRootPart()
-    
-    # [v4.37] GetAllOccurrences가 있다면 사용, 없으면 GetDescendants
-    try:
-        bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
-    except:
-        bodies = list(root.GetDescendants[IDesignBody]())
-        
+    try: bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
+    except: bodies = list(root.GetDescendants[IDesignBody]())
     print(" - Found {0} bodies".format(len(bodies)))
 
     for i, body in enumerate(bodies):
+        matrix_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
         try:
-            # [v4.37] IComponent의 TransformToRoot 속성이 있다면 그것을 사용
-            matrix_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
-            try:
-                comp = body.ParentComponent # IDesignBody의 경우
-                if not comp: comp = body.OccurrenceParent
-                if comp:
-                    m_root = comp.TransformToRoot
-                    matrix_py = get_python_matrix_from_obj(m_root)
-            except: pass
-            
-            original_name = body.Name
-            unique_name = "AUTO_BODY_" + str(i)
+            comp = body.ParentComponent if hasattr(body, "ParentComponent") else None
+            if not comp and hasattr(body, "OccurrenceParent"): comp = body.OccurrenceParent
+            if comp: matrix_py = get_python_matrix_from_obj(comp.TransformToRoot)
+        except: pass
+        
+        original_name = body.Name
+        unique_name = "AUTO_BODY_" + str(i)
+        
+        # [v4.38] 이름 변경 실패가 전체를 중단시키지 않도록 보호
+        try:
             try: RenameInstance.Execute(Selection.Create(body), unique_name)
             except: body.Name = unique_name
-            
-            actual_name = body.Name
-            print(" - [OK] {0} (Pos: {1:.4f}, {2:.4f}, {3:.4f})".format(actual_name, matrix_py[0][3], matrix_py[1][3], matrix_py[2][3]))
-            
-            body_data = {"body_index": i, "body_name": actual_name, "original_name": original_name, "volume": getattr(body.Shape, "Volume", 0.0), "faces": []}
-            for j, face in enumerate(list(body.Faces)):
+        except Exception as e:
+            print(" - [WARNING] Could not rename {0}: {1}".format(original_name, str(e)))
+        
+        actual_name = body.Name
+        print(" - [OK] {0} (Pos: {1:.4f}, {2:.4f}, {3:.4f})".format(actual_name, matrix_py[0][3], matrix_py[1][3], matrix_py[2][3]))
+        
+        body_data = {"body_index": i, "body_name": actual_name, "original_name": original_name, "volume": getattr(body.Shape, "Volume", 0.0), "faces": []}
+        for j, face in enumerate(list(body.Faces)):
+            try:
                 fdata = get_face_data(face, matrix_py)
                 fdata["index"] = j
                 body_data["faces"].append(fdata)
-            all_bodies_data.append(body_data)
-        except Exception as e:
-            print(" - [ERROR] Failed on {0}: {1}".format(body.Name, str(e)))
+            except: pass
+        all_bodies_data.append(body_data)
             
     unit_str = str(root.Document.Units.Length.Symbol)
     return all_bodies_data, [], unit_str
@@ -113,4 +102,4 @@ try:
     final = {"sub_device_name": "DEVICE", "units": uinfo, "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
     print("\n[FINISH] Geometry data saved.")
-except Exception as e: print("\n[FATAL] Outer error: " + str(e))
+except Exception as e: print("\n[FATAL] " + str(e))
