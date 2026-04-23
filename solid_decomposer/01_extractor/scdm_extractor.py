@@ -5,6 +5,17 @@ import os
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
+def get_world_point(face, local_pt):
+    # [v4.25] 매트릭스 계산을 포기하고, 스페이스클레임 내장 GetBoundingBox(Identity) 기능을 이용해 
+    # 페이스의 월드 좌표 중심을 직접 구합니다. 이것이 가장 확실한 월드 좌표 추출법입니다.
+    try:
+        from SpaceClaim.Api.V22.Geometry import Matrix
+        bbox = face.GetBoundingBox(Matrix.Identity)
+        center = bbox.Center
+        return [center.X, center.Y, center.Z]
+    except:
+        return [local_pt.X, local_pt.Y, local_pt.Z]
+
 def get_face_data(face):
     data = {
         "id": 0, "type": "Unknown", "area": 0.0, 
@@ -20,56 +31,47 @@ def get_face_data(face):
             g_type = geom.GetType().Name
             data["type"] = g_type
             
+            # 월드 좌표 중심으로 Origin 추출
+            f = geom.Frame
+            data["origin"] = get_world_point(face, f.Origin)
+            
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
-                f = geom.Frame
-                data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
+                # 축(Axis)은 로컬과 월드가 회전이 없다면 동일하므로 일단 유지
                 data["axis"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
-                
                 if hasattr(shape, "Orientation"):
                     if str(shape.Orientation) == "Reversed": data["is_internal"] = True
             
             elif "Plane" in g_type:
-                f = geom.Frame
-                data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
                 data["normal"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
 
-        # Bounding Box
-        r = getattr(shape, "Range", getattr(face, "Box", getattr(face, "BoundingBox", None)))
-        if r:
-            data["box"]["min"] = [r.Min.X, r.Min.Y, r.Min.Z]
-            data["box"]["max"] = [r.Max.X, r.Max.Y, r.Max.Z]
+        # 월드 기준 Bounding Box
+        try:
+            from SpaceClaim.Api.V22.Geometry import Matrix
+            wb = face.GetBoundingBox(Matrix.Identity)
+            data["box"]["min"] = [wb.Min.X, wb.Min.Y, wb.Min.Z]
+            data["box"]["max"] = [wb.Max.X, wb.Max.Y, wb.Max.Z]
+        except:
+            r = getattr(shape, "Range", getattr(face, "Box", getattr(face, "BoundingBox", None)))
+            if r:
+                data["box"]["min"] = [r.Min.X, r.Min.Y, r.Min.Z]
+                data["box"]["max"] = [r.Max.X, r.Max.Y, r.Max.Z]
     except: pass
     return data
 
 def extract_geometry():
-    print("--- SCDM Modeler Extraction (v4.24) ---")
+    print("--- SCDM BoundingBox World Extraction (v4.25) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
     
-    # [v4.24] Modeler 네임스페이스를 명시적으로 로드하여 GetAllBodies() 확장 메서드 활성화 시도
-    import clr
+    # 1. 모든 바디 인스턴스 수집 (GetDescendants 이용)
+    from SpaceClaim.Api.V22 import IDesignBody
     try:
-        clr.AddReference("SpaceClaim.Api.V22")
-        from SpaceClaim.Api.V22.Modeler import Body as ModelerBody
-    except: pass
-
-    bodies = []
-    try:
-        # [최종 수단] GetAllBodies()가 존재하는지 확인
-        bodies = list(root.GetAllBodies())
-        print(" - Successfully used GetAllBodies()")
+        bodies = list(root.GetDescendants[IDesignBody]())
     except:
-        # 실패시 수동 계층 탐색 (World Coordinate 인스턴스 추출)
-        print(" - GetAllBodies failed, falling back to GetDescendants")
-        try:
-            # V22에서는 GetDescendants[IDesignBody]()가 인스턴스를 반환할 수도 있음
-            from SpaceClaim.Api.V22 import IDesignBody
-            bodies = list(root.GetDescendants[IDesignBody]())
-        except:
-            bodies = list(root.Bodies)
-
+        bodies = list(root.Bodies)
+        
     print(" - Found {0} bodies".format(len(bodies)))
 
     for i, body in enumerate(bodies):
