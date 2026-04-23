@@ -27,22 +27,29 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += f"apply_split_plane('{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
-        # [v4.19] GetAllBodies 의존성을 제거하고 IComponent.Content를 활용한
-        # 가장 완벽하고 네이티브한 월드 좌표 기반 인스턴스 순회 방식을 적용합니다.
+        # [v4.20] 커터 폴더(Component) 생성 시 Part.Create를 거치도록 API 정석 수정
+        # 네이티브 IDesignBody 계층 탐색을 통해 좌표 문제 원천 차단
         script_template = f"""# -*- coding: utf-8 -*-
 import math
 
 ALL_CUTTERS = []
 
-def get_all_bodies_recursive(part_occurrence, body_list):
-    for body in part_occurrence.Bodies:
+def get_all_bodies_recursive(part, body_list):
+    # V22의 가장 강력하고 확실한 월드 좌표 바디 수집기 (GetDescendants)
+    try:
+        for b in part.GetDescendants[IDesignBody]():
+            body_list.append(b)
+        return
+    except:
+        pass
+        
+    for body in part.Bodies:
         body_list.append(body)
-    for comp in part_occurrence.Components:
+    for comp in part.Components:
         if hasattr(comp, "Content") and comp.Content:
             get_all_bodies_recursive(comp.Content, body_list)
-        else:
-            if hasattr(comp, "Template") and comp.Template:
-                get_all_bodies_recursive(comp.Template, body_list)
+        elif hasattr(comp, "Template") and comp.Template:
+            get_all_bodies_recursive(comp.Template, body_list)
 
 def get_matching_bodies(target_name):
     try:
@@ -65,9 +72,19 @@ def _get_target_cutter_comp(target_body_name):
     
     safe_name = "".join(c for c in t_name if c.isalnum() or c == u"_")
     comp_name = "CUTTERS_FOR_" + safe_name
+    
+    # 이미 있는지 확인
     for comp in root.Components:
         if comp.Name == comp_name: return comp
-    return Component.Create(root, comp_name)
+        
+    # 없으면 새로 생성 (API V22 방식: Part 먼저 만들고 Component로 인스턴스화)
+    try:
+        new_part = Part.Create(root.Document, comp_name)
+        new_comp = Component.Create(root, new_part)
+        return new_comp
+    except Exception as e:
+        print("    [WARN] Failed to create component: " + str(e))
+        return root # 실패시 루트 파트에 둠
 
 def _safe_split(target_body, cutter_face):
     try:
@@ -116,7 +133,9 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
         
         if tool:
             tool.Name = name
-            tool.SetParent(_get_target_cutter_comp(target_body.Name))
+            parent_comp = _get_target_cutter_comp(target_body.Name)
+            try: tool.SetParent(parent_comp)
+            except: pass
             return tool
         return None
     except: return None
@@ -188,7 +207,9 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
             
             if tool:
                 tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
-                tool.SetParent(_get_target_cutter_comp(target.Name))
+                parent_comp = _get_target_cutter_comp(target.Name)
+                try: tool.SetParent(parent_comp)
+                except: pass
                 ALL_CUTTERS.append(tool)
                 if _safe_split(target, tool.Faces[0]):
                     print("    [OK] Split Success")
