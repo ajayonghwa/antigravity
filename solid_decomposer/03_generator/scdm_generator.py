@@ -19,9 +19,8 @@ class SCDMGenerator:
         for b_idx in unique_body_indices:
             bname = body_index_to_name[b_idx]
             bname_b64 = base64.b64encode(bname.encode('utf-8')).decode('ascii')
-            comp_creation_calls += "create_body_component('{0}', {1})\n".format(bname_b64, b_idx)
+            comp_creation_calls += "_init_comp('{0}', {1})\n".format(bname_b64, b_idx)
 
-        # [v4.81] 스케일 팩터 결정 (SCDM API는 항상 미터 단위)
         scale = 0.001 if units == "mm" else 1.0
         print(f" - Generator Scale: {scale} (Input units: {units})")
 
@@ -32,27 +31,14 @@ class SCDMGenerator:
             body = plan.get("body_name", "Unknown")
             body_b64 = base64.b64encode(body.encode('utf-8')).decode('ascii')
             
+            import json as pyjson
             if strat in ["OGRID", "CGRID", "RADIAL_OFFSET"]:
-                center = plan.get('center')
-                if not center: continue
-                
-                import json as pyjson
-                center_m = [float(c) * scale for c in center]
+                center_m = [float(c) * scale for c in plan.get('center', [0,0,0])]
                 axis = [float(a) for a in plan.get('axis', [0,0,1])]
                 offset_m = float(plan.get('core_offset', 1.0)) * scale
-                
-                # [v4.84] 가독성을 위해 원본 바디 이름을 주석으로 추가
                 if strat == "OGRID":
                     execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})  # Target: {6}\n".format(body_b64, pyjson.dumps(center_m), pyjson.dumps(axis), offset_m, i, body_idx, body)
-                elif strat == "CGRID":
-                    wall_dir = [float(w) for w in plan.get('wall_direction', [0,0,1])]
-                    execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})  # Target: {7}\n".format(body_b64, pyjson.dumps(center_m), pyjson.dumps(axis), offset_m, pyjson.dumps(wall_dir), i, body_idx, body)
-                elif strat == "RADIAL_OFFSET":
-                    r_m = float(plan.get('split_radius', 1.0)) * scale
-                    execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})  # Target: {6}\n".format(body_b64, pyjson.dumps(center_m), pyjson.dumps(axis), r_m, i, body_idx, body)
-            
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
-                import json as pyjson
                 split = plan.get("split_plane")
                 if not split: continue
                 origin_m = [float(o) * scale for o in split['origin']]
@@ -60,81 +46,48 @@ class SCDMGenerator:
                 execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})  # Target: {6}\n".format(body_b64, pyjson.dumps(origin_m), pyjson.dumps(normal), strat, i, body_idx, body)
 
         template = """# -*- coding: utf-8 -*-
-# [v4.56] Standard Script Template
-import math
 import base64
-import re
+import json as pyjson
 import clr
 
+# [v5.01] 명시적 참조 및 네임스페이스 충돌 방지
 try:
     clr.AddReference("SpaceClaim.Api.V22")
-    from SpaceClaim.Api.V22 import *
-    from SpaceClaim.Api.V22.Modeler import *
-    from SpaceClaim.Api.V22.Geometry import *
-    from SpaceClaim.Api.V22.Scripting import *
+    import SpaceClaim.Api.V22.Geometry as g
+    import SpaceClaim.Api.V22.Modeler as m
+    import SpaceClaim.Api.V22.Scripting.Selection as sel
+    import SpaceClaim.Api.V22.Scripting.Commands as cmd
+    import SpaceClaim.Api.V22.Scripting.Helpers as help
 except: pass
 
 BODY_COMP_MAP = {}
 
 def get_matching_bodies(body_b64):
-    try: target_name = base64.b64decode(body_b64).decode('utf-8').lower().strip()
-    except: target_name = body_b64.lower().strip()
-    
-    all_bodies = []
-    try:
-        # [v4.87] 추출기(Extractor)에서 검증된 로직 그대로 사용
-        root = GetRootPart()
-        if not root: root = Application.GetActiveDocument().MainPart
-        
-        desc = list(root.GetDescendants[IDesignBody]())
-        for b in desc: all_bodies.append(b)
-        
-        # 하위 컴포넌트 내부 바디까지 샅샅이 뒤짐
-        if not desc:
-            for b in root.Bodies: all_bodies.append(b)
-            for comp in root.Components:
-                for b in comp.Template.Bodies: all_bodies.append(b)
-    except: pass
-    
-    matched = []
+    try: t_clean = base64.b64decode(body_b64).decode('utf-8').lower().strip()
+    except: t_clean = body_b64.lower().strip()
     import re
-    # [v4.89] 정규표현식을 사용한 정밀 매칭: [원본이름] + [숫자] 또는 [원본이름] 자체
-    # 공백이나 특수문자를 제거한 상태에서 비교
-    t_clean = target_name.replace(" ", "").replace("(", "").replace(")", "").replace("_", "")
-    # 패턴: 시작이 t_clean이고 그 뒤에 숫자만 있거나 아무것도 없는 경우
-    pattern = re.compile("^" + re.escape(t_clean) + r"\d*$")
-    
-    for b in all_bodies:
-        b_name_clean = b.Name.lower().replace(" ", "").replace("(", "").replace(")", "").replace("_", "")
-        if pattern.match(b_name_clean):
-            matched.append(b)
-    
-    if not matched:
-        print("   [WARN] No body or fragments found matching: {0}".format(target_name))
-    else:
-        print("   [INFO] Found {0} targets for '{1}'".format(len(matched), target_name))
-    return matched
+    root = Application.GetActiveDocument().MainPart
+    all_b = root.GetDescendants[m.IDesignBody]()
+    pattern = re.compile("^" + re.escape(t_clean) + r"\\\\d*$")
+    matches = [b for b in all_b if pattern.match(b.Name.lower().replace(" ", "")) or b.Name.lower() == t_clean]
+    if matches: print("   [INFO] Found {0} targets for '{1}'".format(len(matches), t_clean))
+    return matches
 
-def create_body_component(name_b64, body_idx):
-    global BODY_COMP_MAP
-    root = GetRootPart()
-    try: t_name = base64.b64decode(name_b64).decode('utf-8')
-    except: t_name = name_b64
+def _init_comp(name_b64, body_idx):
+    root = Application.GetActiveDocument().MainPart
     comp_name = "CUTTERS_{0}".format(body_idx)
-    target_comp = None
-    for comp in root.Components:
-        if comp.Name == comp_name: target_comp = comp; break
+    target_comp = next((c for c in root.Components if c.Name == comp_name), None)
     if not target_comp:
         try:
-            target_part = Part.Create(root.Document, comp_name)
-            target_comp = Component.Create(root, target_part)
+            target_part = m.Part.Create(root.Document, comp_name)
+            target_comp = m.Component.Create(root, target_part)
         except: pass
     BODY_COMP_MAP[body_idx] = target_comp
 
 def _move_to_comp(obj, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return
-    try: ComponentHelper.MoveBodiesToComponent(Selection.Create(obj), target_comp)
+    try: help.ComponentHelper.MoveBodiesToComponent(sel.Selection.Create(obj), target_comp)
     except: pass
 
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
@@ -142,39 +95,34 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
-        g = SpaceClaim.Api.V22.Geometry
-        origin_pt = g.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
-        direction = g.Direction.Create(axis[0], axis[1], axis[2])
+        # [v5.01] getattr를 사용하여 네임스페이스 에러 우회
+        p_factory = g.Point
+        d_factory = g.Direction
+        origin_pt = getattr(p_factory, "Create")(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+        direction = getattr(d_factory, "Create")(axis[0], axis[1], axis[2])
         
-        root = GetRootPart()
-        if not root: root = Application.GetActiveDocument().MainPart
-        
-        bodies_before = list(root.GetDescendants[IDesignBody]())
+        root = Application.GetActiveDocument().MainPart
+        bodies_before = list(root.GetDescendants[m.IDesignBody]())
         
         try:
-            # [v5.00] 회전 방지를 위해 정렬된 프레임 생성
-            # 노멀 벡터(direction)와 수직인 보조 벡터 계산
             ref = g.Direction.DirZ
             if abs(direction.Z) > 0.9: ref = g.Direction.DirX
             x_axis = g.Direction.Cross(direction, ref)
             frame = g.Frame.Create(origin_pt, direction, x_axis)
-            
             circle = g.Circle.Create(frame, MM(offset*1000))
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            dc = m.DesignCurve.Create(root, g.CurveSegment.Create(circle))
             
-            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), None, None)
+            cmd.ExtrudeEdges.Execute(sel.Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), None, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
             return
 
-        bodies_after = list(root.GetDescendants[IDesignBody]())
-        new_b_list = [b for b in bodies_after if b not in bodies_before]
-        
-        if new_b_list:
-            new_b = new_b_list[0]
+        bodies_after = list(root.GetDescendants[m.IDesignBody]())
+        new_b = next((b for b in bodies_after if b not in bodies_before), None)
+        if new_b:
             print("   [DEBUG 3] Starting split")
-            try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
+            try: cmd.SplitBody.ByCutter(sel.Selection.Create(targets), sel.Selection.Create(new_b.Faces[0]), True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
         dc.Delete()
@@ -187,51 +135,44 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start split_plane for {0}".format(targets[0].Name))
-        g = SpaceClaim.Api.V22.Geometry
-        origin = g.Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
-        normal = g.Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        p_factory = g.Point
+        d_factory = g.Direction
+        origin = getattr(p_factory, "Create")(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
+        normal = getattr(d_factory, "Create")(normal_list[0], normal_list[1], normal_list[2])
         
-        root = GetRootPart()
-        if not root: root = Application.GetActiveDocument().MainPart
-        
-        bodies_before = list(root.GetDescendants[IDesignBody]())
+        root = Application.GetActiveDocument().MainPart
+        bodies_before = list(root.GetDescendants[m.IDesignBody]())
         
         try:
-            # [v5.00] 회전 방지를 위해 정렬된 프레임 생성
             ref = g.Direction.DirZ
             if abs(normal.Z) > 0.9: ref = g.Direction.DirX
             x_axis = g.Direction.Cross(normal, ref)
             frame = g.Frame.Create(origin, normal, x_axis)
-            
             circle = g.Circle.Create(frame, MM(20000)) 
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            dc = m.DesignCurve.Create(root, g.CurveSegment.Create(circle))
             
             try:
-                Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
+                cmd.Fill.Execute(sel.Selection.Create(dc.Edges[0]), None, None)
                 print("   [DEBUG 3] Fill success")
             except:
                 print("   [DEBUG 3-FAIL] Fill failed, trying DatumPlane")
                 plane_obj = g.Plane.Create(frame)
-                datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
-                SplitBody.ByCutter(Selection.Create(targets), Selection.Create(datum_plane), True, None)
+                datum_plane = m.DatumPlane.Create(root, "Cutter_Plane", plane_obj)
+                cmd.SplitBody.ByCutter(sel.Selection.Create(targets), sel.Selection.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
                 dc.Delete()
                 return
 
-            bodies_after = list(root.GetDescendants[IDesignBody]())
-            new_b_list = [b for b in bodies_after if b not in bodies_before]
-            
-            if new_b_list:
-                new_b = new_b_list[0]
+            bodies_after = list(root.GetDescendants[m.IDesignBody]())
+            new_b = next((b for b in bodies_after if b not in bodies_before), None)
+            if new_b:
                 print("   [DEBUG 4] Starting split")
-                try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
+                try: cmd.SplitBody.ByCutter(sel.Selection.Create(targets), sel.Selection.Create(new_b.Faces[0]), True, None)
                 except Exception as se: print("   [WARN] Split failed: " + str(se))
                 _move_to_comp(new_b, b_idx)
             dc.Delete()
-            
         except Exception as de:
             print("   [DEBUG 3-FAIL] Cutter creation error: " + str(de))
-            
         print("   [OK] {0} complete for {1}".format(strategy, targets[0].Name))
     except Exception as e:
         print("   [ERROR] apply_split_plane crashed: " + str(e))
