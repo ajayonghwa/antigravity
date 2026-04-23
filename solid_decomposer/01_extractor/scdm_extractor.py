@@ -6,26 +6,21 @@ import clr
 def load_scdm_api():
     try:
         clr.AddReference("SpaceClaim.Api.V22")
-        import SpaceClaim.Api.V22 as scapi
-        return scapi
+        from SpaceClaim.Api.V22 import Matrix, Point, Direction, Frame, Component, Selection
+        return Matrix, Point, Direction, Frame, Component, Selection
     except: return None
 
-scapi = load_scdm_api()
+# API 클래스들을 전역으로 로드
+api_classes = load_scdm_api()
+if api_classes:
+    Matrix, Point, Direction, Frame, Component, Selection = api_classes
+else:
+    print("[FATAL] Failed to load SpaceClaim API V22")
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
-def get_world_transform(occurrence):
-    '''컴포넌트 계층을 따라가며 월드 변환 매트릭스 계산'''
-    matrix = scapi.Matrix.Identity
-    curr = occurrence
-    while curr:
-        if hasattr(curr, "Transform"):
-            matrix = curr.Transform.Matrix * matrix
-        curr = curr.Parent
-    return matrix
-
-def get_face_data(face, transform):
+def get_face_data(face, world_matrix):
     data = {
         "id": 0, "type": "Unknown", "area": 0.0, 
         "box": {"min": [0,0,0], "max": [0,0,0]},
@@ -35,7 +30,6 @@ def get_face_data(face, transform):
         if hasattr(face, "Id"): data["id"] = face.Id
         shape = face.Shape if hasattr(face, "Shape") else face
         
-        # [v4.8] 로컬 지오메트리 정보 추출
         if hasattr(shape, "Geometry"):
             geom = shape.Geometry
             g_type = geom.GetType().Name
@@ -44,12 +38,9 @@ def get_face_data(face, transform):
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
                 f = geom.Frame
-                # 로컬 좌표
-                l_origin = f.Origin
-                l_axis = f.DirZ
                 # 월드 좌표로 변환
-                w_origin = transform * l_origin
-                w_axis = transform * l_axis
+                w_origin = world_matrix * f.Origin
+                w_axis = world_matrix * f.DirZ
                 data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
                 data["axis"] = [w_axis.X, w_axis.Y, w_axis.Z]
                 
@@ -58,23 +49,23 @@ def get_face_data(face, transform):
             
             elif "Plane" in g_type:
                 f = geom.Frame
-                w_origin = transform * f.Origin
-                w_normal = transform * f.DirZ
+                w_origin = world_matrix * f.Origin
+                w_normal = world_matrix * f.DirZ
                 data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
                 data["normal"] = [w_normal.X, w_normal.Y, w_normal.Z]
 
         # Bounding Box (변환 적용)
         r = getattr(shape, "Range", getattr(face, "Box", None))
         if r:
-            p1 = transform * r.Min
-            p2 = transform * r.Max
+            p1 = world_matrix * r.Min
+            p2 = world_matrix * r.Max
             data["box"]["min"] = [min(p1.X, p2.X), min(p1.Y, p2.Y), min(p1.Z, p2.Z)]
             data["box"]["max"] = [max(p1.X, p2.X), max(p1.Y, p2.Y), max(p1.Z, p2.Z)]
     except: pass
     return data
 
 def extract_geometry():
-    print("--- SCDM World-Transform Extraction (v4.8) ---")
+    print("--- SCDM Robust World Extraction (v4.10) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
@@ -83,19 +74,20 @@ def extract_geometry():
     try: unit_str = str(root.Document.Units.Length.Symbol)
     except: pass
 
-    def collect_with_transform(part, current_transform, blist):
+    def collect_with_transform(part, current_m, blist):
         # 바디 수집
         for b in part.Bodies:
-            blist.append((b, current_transform))
+            blist.append((b, current_m))
         # 하위 컴포넌트 재귀 탐색
         for c in part.Components:
             if c.Template:
-                # 계층적 변환 매트릭스 누적
-                new_transform = current_transform * c.Transform
-                collect_with_transform(c.Template, new_transform, blist)
+                # 계층적 변환 매트릭스 누적 (Matrix.Create()를 통한 안전한 복제 및 곱셈)
+                new_m = current_m * c.Transform.Matrix
+                collect_with_transform(c.Template, new_m, blist)
     
     bodies_info = []
-    collect_with_transform(root, scapi.Matrix.Identity, bodies_info)
+    # 초기 매트릭스는 Identity
+    collect_with_transform(root, Matrix.Identity, bodies_info)
     print(" - Found {0} bodies in hierarchy".format(len(bodies_info)))
 
     for i, (body, transform) in enumerate(bodies_info):
@@ -119,7 +111,7 @@ def extract_geometry():
                 fmap[face] = j
             
             all_bodies_data.append(body_data)
-            print(" - [OK] {0} (Transformed to World)".format(uname))
+            print(" - [OK] {0} (World Matrix Applied)".format(uname))
         except Exception as e:
             print(" - [ERROR] {0}: {1}".format(body.Name, str(e)))
             
@@ -129,5 +121,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": uinfo, "warnings": warns, "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] World-coordinate data saved.")
+    print("\n[FINISH] Geometry data saved.")
 except Exception as e: print("\n[FATAL] " + str(e))
