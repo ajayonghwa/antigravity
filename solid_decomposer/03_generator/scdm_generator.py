@@ -77,22 +77,30 @@ except: pass
 BODY_COMP_MAP = {}
 
 def get_matching_bodies(body_b64):
-    try: target_name = base64.b64decode(body_b64).decode('utf-8').lower()
-    except: target_name = body_b64.lower()
+    try: target_name = base64.b64decode(body_b64).decode('utf-8').lower().strip()
+    except: target_name = body_b64.lower().strip()
     
     all_bodies = []
-    root = GetRootPart()
     try:
+        # [v4.87] 추출기(Extractor)에서 검증된 로직 그대로 사용
+        root = GetRootPart()
+        if not root: root = Application.GetActiveDocument().MainPart
+        
         desc = list(root.GetDescendants[IDesignBody]())
         for b in desc: all_bodies.append(b)
+        
+        # 하위 컴포넌트 내부 바디까지 샅샅이 뒤짐
         if not desc:
             for b in root.Bodies: all_bodies.append(b)
+            for comp in root.Components:
+                for b in comp.Template.Bodies: all_bodies.append(b)
     except: pass
     
     matched = []
     for b in all_bodies:
-        # [v4.82] 대소문자 구분 없는 포함 여부로 매칭 (가장 확실함)
-        if target_name in b.Name.lower(): matched.append(b)
+        b_name_clean = b.Name.lower().replace(" ", "")
+        t_name_clean = target_name.replace(" ", "")
+        if t_name_clean in b_name_clean: matched.append(b)
     
     if not matched:
         print("   [WARN] No body found matching: {0}".format(target_name))
