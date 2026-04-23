@@ -102,7 +102,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
-        # [v5.10] 사용자 환경에서 성공한 전역 클래스 직접 호출 방식 사용
         origin_pt = Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
         direction = Direction.Create(axis[0], axis[1], axis[2])
         
@@ -111,32 +110,28 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            # [v5.10] 90도 회전 방지: Frame 없이 Circle을 직접 법선 방향으로 생성
-            circle = Circle.Create(origin_pt, direction, MM(offset*1000))
+            # [v5.11] 2개의 인자만 받는 Circle.Create 시그니처에 맞춤 + 90도 회전 방지
+            # Frame.Create(origin, normal)는 normal을 Z축(법선)으로 설정함
+            temp_frame = Frame.Create(origin_pt, direction)
+            circle = Circle.Create(temp_frame, MM(offset*1000))
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            # [v5.10] ExtrudeEdges 실행 안정성 강화
+            # [v5.11] Selection 참조를 명시적으로 수행
+            sel_obj = Selection.Create(dc.Edges[0])
             options = ExtrudeEdgeOptions()
-            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), options, None)
+            ExtrudeEdges.Execute(sel_obj, origin_pt, direction, MM(10000), options, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
-            # [Fallback] 전체 경로를 통한 재시도
-            try:
-                origin_pt = SpaceClaim.Api.V22.Geometry.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
-                direction = SpaceClaim.Api.V22.Geometry.Direction.Create(axis[0], axis[1], axis[2])
-                circle = SpaceClaim.Api.V22.Geometry.Circle.Create(origin_pt, direction, MM(offset*1000))
-                dc = SpaceClaim.Api.V22.Modeler.DesignCurve.Create(root, SpaceClaim.Api.V22.Geometry.CurveSegment.Create(circle))
-                ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), options, None)
-                print("   [DEBUG 2-RETRY] Success with full path")
-            except Exception as re:
-                print("   [DEBUG 2-FAIL] Retry failed: " + str(re))
-                return
+            return
 
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = next((b for b in bodies_after if b not in bodies_before), None)
         if new_b:
-            try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
+            try: 
+                target_sel = Selection.Create(targets)
+                cutter_sel = Selection.Create(new_b.Faces[0])
+                SplitBody.ByCutter(target_sel, cutter_sel, True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
         dc.Delete()
@@ -157,19 +152,15 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            # [v5.10] 90도 회전 방지: Frame 없이 Circle을 직접 법선 방향으로 생성
-            circle = Circle.Create(origin, normal, MM(20000)) 
+            # [v5.11] 2개의 인자만 받는 Circle.Create 시그니처에 맞춤
+            temp_frame = Frame.Create(origin, normal)
+            circle = Circle.Create(temp_frame, MM(20000)) 
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
             try:
                 Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
             except:
-                # [v5.10] Frame이 꼭 필요한 경우에만 생성
-                ref = Direction.DirZ
-                if abs(normal.Z) > 0.9: ref = Direction.DirX
-                x_axis = Direction.Cross(normal, ref)
-                frame = Frame.Create(origin, normal, x_axis)
-                plane_obj = Plane.Create(frame)
+                plane_obj = Plane.Create(temp_frame)
                 datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
                 SplitBody.ByCutter(Selection.Create(targets), Selection.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
@@ -179,7 +170,10 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             bodies_after = list(root.GetDescendants[IDesignBody]())
             new_b = next((b for b in bodies_after if b not in bodies_before), None)
             if new_b:
-                try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
+                try: 
+                    target_sel = Selection.Create(targets)
+                    cutter_sel = Selection.Create(new_b.Faces[0])
+                    SplitBody.ByCutter(target_sel, cutter_sel, True, None)
                 except Exception as se: print("   [WARN] Split failed: " + str(se))
                 _move_to_comp(new_b, b_idx)
             dc.Delete()
