@@ -103,16 +103,49 @@ class ValidationEngine:
         except:
             aspect_ratio = 100
             aspect_score = 0
-        
-        total_score = (face_score * 0.4) + (ortho_score * 0.4) + (aspect_score * 0.2)
-        
+
+        # 4. Skewness Score (NEW)
+        # 각 면의 법선벡터가 가장 가까운 주축(X/Y/Z)에서 벗어난 평균 각도
+        # 0° = 완전 정렬(100점), 45° 이상 = 0점
+        skewness_score = 100
+        try:
+            principal_axes = [
+                np.array([1, 0, 0]),
+                np.array([0, 1, 0]),
+                np.array([0, 0, 1])
+            ]
+            deviations = []
+            for f in faces:
+                n = f.normalAt(f.Center())
+                n_np = np.array([n.x, n.y, n.z])
+                n_norm = np.linalg.norm(n_np)
+                if n_norm < 1e-9:
+                    continue
+                n_np = n_np / n_norm
+                # 가장 가까운 주축과의 각도 (절댓값으로 방향 무관하게 계산)
+                min_dev = min(
+                    np.degrees(np.arccos(np.clip(abs(np.dot(n_np, ax)), 0.0, 1.0)))
+                    for ax in principal_axes
+                )
+                deviations.append(min_dev)
+            if deviations:
+                avg_deviation = np.mean(deviations)
+                # 45° → 0점, 0° → 100점 (선형 보간)
+                skewness_score = max(0.0, 100.0 - (avg_deviation / 45.0) * 100.0)
+        except:
+            skewness_score = 50  # Fallback
+
+        # 가중치: face 35% / ortho 35% / aspect 15% / skewness 15%
+        total_score = (face_score * 0.35) + (ortho_score * 0.35) + (aspect_score * 0.15) + (skewness_score * 0.15)
+
         return {
             "total_score": total_score,
             "face_count": face_count,
             "face_score": face_score,
             "ortho_score": ortho_score,
             "aspect_ratio": aspect_ratio,
-            "aspect_score": aspect_score
+            "aspect_score": aspect_score,
+            "skewness_score": skewness_score
         }
 
 if __name__ == "__main__":

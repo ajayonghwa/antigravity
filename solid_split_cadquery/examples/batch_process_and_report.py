@@ -52,7 +52,7 @@ def process_and_report():
         print(f"Processing {base_name} with Expert Strategy...")
         
         model = cq.importers.importStep(full_path)
-        planner = StrategyPlanner(model, max_bodies=40, max_time=15, target_score=85, min_vol_ratio=0.02)
+        planner = StrategyPlanner(model, max_bodies=30, max_time=10, target_score=80, min_vol_ratio=0.025)
         results = planner.plan_and_execute()
         
         val_result = validator.validate_split(model, results)

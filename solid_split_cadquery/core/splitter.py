@@ -49,21 +49,21 @@ class Splitter:
 
     def apply_planar_split(self, origin, normal):
         """Split into two solids along a plane"""
+        # Ensure we are working with a Solid
+        solid = self.model.val() if hasattr(self.model, "val") else self.model
+        
         # Create a large box representing half-space
-        inf = 10000.0 # Large enough for most models
-        
-        # Orient a workplane to the plane
+        inf = 10000.0
         wp = cq.Workplane(cq.Plane(origin=origin, normal=normal))
+        half_space = wp.workplane().rect(inf, inf).extrude(inf).val()
         
-        # Half-space box (centered at origin of the plane, extending in normal direction)
-        half_space = wp.workplane().rect(inf, inf).extrude(inf)
-        
-        # side_a is the part inside the half_space (in the direction of normal)
-        side_a = self.model.intersect(half_space)
+        # side_a is the part inside the half_space
+        side_a_solid = solid.intersect(half_space)
         # side_b is the part outside the half_space
-        side_b = self.model.cut(half_space)
+        side_b_solid = solid.cut(half_space)
         
-        return [side_a, side_b]
+        # Return as Workplane objects for consistency
+        return [cq.Workplane("XY").add(side_a_solid), cq.Workplane("XY").add(side_b_solid)]
 
     def apply_sector_split(self, center, axis, num_sectors=4):
         """Split the body into radial sectors around an axis"""
