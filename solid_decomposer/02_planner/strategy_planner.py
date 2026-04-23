@@ -371,8 +371,12 @@ class StrategyPlanner:
         return [self._create_ogrid_dict(hole, axis, safe_offset)]
 
     def _create_ogrid_dict(self, hole, axis, offset):
-        box = hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
-        origin = (np.array(box["min"]) + np.array(box["max"])) / 2.0
+        # [v4.2] 추출된 지오메트리 원점이 있으면 우선적으로 사용
+        origin = hole.get("origin")
+        if origin is None:
+            box = hole.get("box", {"min": [0,0,0], "max": [0,0,0]})
+            origin = (np.array(box["min"]) + np.array(box["max"])) / 2.0
+            
         return {
             "strategy": "OGRID",
             "body_name": self.body_data["body_name"],
