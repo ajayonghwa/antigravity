@@ -142,22 +142,22 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
-        origin_pt = Point.Create(center[0], center[1], center[2])
-        direction = Direction.Create(axis[0], axis[1], axis[2])
+        # [v4.99] Full Path 명시하여 네임스페이스 충돌 방지
+        g = SpaceClaim.Api.V22.Geometry
+        origin_pt = g.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+        direction = g.Direction.Create(axis[0], axis[1], axis[2])
         
         root = GetRootPart()
         if not root: root = Application.GetActiveDocument().MainPart
         
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
-        # [v4.98] 사용자가 제안한 상세 ExtrudeEdges 구문 적용
         try:
-            frame = Frame.Create(origin_pt, direction)
-            circle = Circle.Create(frame, offset)
+            frame = g.Frame.Create(origin_pt, direction)
+            circle = g.Circle.Create(frame, MM(offset*1000))
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            # 사용자 제안 형식: Selection, Point, Direction, Distance, Options, Info
-            # 10m(10,000mm)만큼 지정된 방향으로 추출
+            # 사용자 제안 방식 1: 원통형 Extrude
             ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), None, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
@@ -183,28 +183,51 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start split_plane for {0}".format(targets[0].Name))
-        origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
-        normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        g = SpaceClaim.Api.V22.Geometry
+        origin = g.Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
+        normal = g.Direction.Create(normal_list[0], normal_list[1], normal_list[2])
         
         root = GetRootPart()
         if not root: root = Application.GetActiveDocument().MainPart
         
-        print("   [DEBUG 2] Creating DatumPlane as Cutter")
+        bodies_before = list(root.GetDescendants[IDesignBody]())
+        print("   [DEBUG 2] Creating Cutter by Vector Extrude")
+        
         try:
-            frame = Frame.Create(origin, normal)
-            datum_plane = DatumPlane.Create(root, "Cutter_Plane", frame)
-            print("   [DEBUG 3] DatumPlane success")
+            # 사용자 제안 방식 2: 벡터형 Extrude를 이용한 평면 생성
+            # 먼저 작은 선을 하나 긋고 이를 옆으로 길게 뽑아 면을 만듭니다.
+            frame = g.Frame.Create(origin, normal)
+            # 평면상에 가상의 엣지를 생성하기 위해 Circle의 일부를 사용하거나 
+            # 단순히 직선을 하나 생성 (여기서는 가장 안정적인 Circle 기반 채우기 방식 병행)
+            circle = g.Circle.Create(frame, MM(20000)) # 20m radius
+            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            try: 
+            # [v4.99] Fill이 실패할 경우를 대비하여 DatumPlane 방식도 이중으로 준비
+            try:
+                Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
+                print("   [DEBUG 3] Fill success")
+            except:
+                print("   [DEBUG 3-FAIL] Fill failed, trying DatumPlane")
+                plane_obj = g.Plane.Create(frame)
+                datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
                 SplitBody.ByCutter(Selection.Create(targets), Selection.Create(datum_plane), True, None)
-                print("   [DEBUG 4] Split by DatumPlane success")
-            except Exception as se: 
-                print("   [WARN] Split failed: " + str(se))
+                _move_to_comp(datum_plane, b_idx)
+                dc.Delete()
+                return
+
+            bodies_after = list(root.GetDescendants[IDesignBody]())
+            new_b_list = [b for b in bodies_after if b not in bodies_before]
             
-            _move_to_comp(datum_plane, b_idx)
+            if new_b_list:
+                new_b = new_b_list[0]
+                print("   [DEBUG 4] Starting split")
+                try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b.Faces[0]), True, None)
+                except Exception as se: print("   [WARN] Split failed: " + str(se))
+                _move_to_comp(new_b, b_idx)
+            dc.Delete()
             
         except Exception as de:
-            print("   [DEBUG 3-FAIL] DatumPlane creation error: " + str(de))
+            print("   [DEBUG 3-FAIL] Cutter creation error: " + str(de))
             
         print("   [OK] {0} complete for {1}".format(strategy, targets[0].Name))
     except Exception as e:
