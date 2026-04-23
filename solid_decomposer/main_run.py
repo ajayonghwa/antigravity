@@ -4,30 +4,38 @@ import sys
 import json
 import traceback
 
-# 1~3단계 모듈 경로 추가
-sys.path.append(os.path.join(os.path.dirname(__file__), '01_extractor'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '02_planner'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '03_generator'))
-
-from extract_manager import ExtractManager
-from strategy_planner import StrategyPlanner
-from scdm_generator import SCDMGenerator
-
 def run_pipeline(sub_device_name, input_json="geometry_data.json"):
-    print(f"=== {sub_device_name} Solid Decomposition Pipeline Started (v4.53) ===")
+    print(f"=== {sub_device_name} Solid Decomposition Pipeline Started (v4.54) ===")
     
     project_root = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(project_root, "data")
-    script_dir = os.path.join(project_root, "04_scripts")
     
     try:
+        # [v4.54] 임포트 로직을 try 블록 내부로 이동 (ModuleNotFoundError 추적용)
+        print(" - Loading internal modules...")
+        sys.path.append(os.path.join(project_root, '01_extractor'))
+        sys.path.append(os.path.join(project_root, '02_planner'))
+        sys.path.append(os.path.join(project_root, '03_generator'))
+        sys.path.append(os.path.join(project_root, 'scdm_bridge'))
+
+        try:
+            from extract_manager import ExtractManager
+            from strategy_planner import StrategyPlanner
+            from scdm_generator import SCDMGenerator
+            from guide_generator import GuideGenerator
+            import numpy as np
+            print("   [OK] All modules loaded (including numpy)")
+        except ImportError as ie:
+            print(f"\n[CRITICAL ERROR] Dependency Missing: {str(ie)}")
+            print("Please ensure 'numpy' is installed in your python environment.")
+            sys.exit(1)
+
         # 1. 추출된 데이터 로드
         input_filename = os.path.basename(input_json)
         manager = ExtractManager(project_root)
         data = manager.load_geometry_data(input_filename)
         
         if not data:
-            print(f"[ERROR] No data found for {input_json}. Please run Step 1 in SpaceClaim first.")
+            print(f"[ERROR] No data found for {input_json}.")
             return
 
         # 2. 분할 전략 수립
@@ -49,37 +57,28 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
                 else:
                     print(f"   [SKIP] No automatic plans generated.")
             except Exception as e:
-                print(f"   [CRASH] Error analyzing body {b_name}: {str(e)}")
+                print(f"   [CRASH] Error during analysis: {str(e)}")
                 traceback.print_exc()
 
         # 3. SCDM 실행 스크립트 생성
         generator = SCDMGenerator(project_root)
         output_filename = "scdm_decomposition_script.py"
-        
-        if not os.path.exists(script_dir):
-            os.makedirs(script_dir)
-            
         output_path = generator.generate_script(all_plans, output_name=output_filename)
         print(f"\n[Success] Step 3 script generated: {output_path}")
         
         # 4. 분석 결과 리포트(MD) 생성
         try:
-            sys.path.append(os.path.join(os.path.dirname(__file__), 'scdm_bridge'))
-            from guide_generator import GuideGenerator
             guide_text = f"# Decomposition Strategy Report: {sub_device_name}\n"
             guide_text += f"- **Model Units**: {current_units}\n\n"
-            
             for body in bodies_list:
                 strategy, plans = planner.analyze_body(body)
                 guide_text += GuideGenerator.generate_markdown(body.get('body_name','Unknown'), strategy, plans)
                 guide_text += "\n\n"
-                
-            guide_path = os.path.join(script_dir, "Decomposition_Guide.md")
-            with open(guide_path, "w", encoding="utf-8") as f:
-                f.write(guide_text)
+            guide_path = os.path.join(project_root, "04_scripts", "Decomposition_Guide.md")
+            with open(guide_path, "w", encoding="utf-8") as f: f.write(guide_text)
             print(f"[Success] Planning guide generated: {guide_path}")
-        except:
-            print(" [WARN] Failed to generate markdown guide (bridge module missing or error)")
+        except Exception as ge:
+            print(f" [WARN] Guide generation failed: {str(ge)}")
 
         print(f"\n=== Pipeline Completed for {sub_device_name} ===")
 
