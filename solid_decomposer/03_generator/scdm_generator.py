@@ -102,41 +102,36 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
-        g = SpaceClaim.Api.V22.Geometry
-        # [v5.09] getattr를 사용하여 네임스페이스 충돌 우회
-        p_factory = getattr(g.Point, "Create")
-        d_factory = getattr(g.Direction, "Create")
-        
-        origin_pt = p_factory(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
-        direction = d_factory(axis[0], axis[1], axis[2])
+        # [v5.10] 사용자 환경에서 성공한 전역 클래스 직접 호출 방식 사용
+        origin_pt = Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+        direction = Direction.Create(axis[0], axis[1], axis[2])
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            # [v5.09] 방향 정렬 최적화: direction이 평면의 Normal이 되도록 프레임 생성
-            ref = getattr(g.Direction, "DirZ")
-            if abs(direction.Z) > 0.9: ref = getattr(g.Direction, "DirX")
-            x_axis = getattr(g.Direction, "Cross")(direction, ref)
+            # [v5.10] 90도 회전 방지: Frame 없이 Circle을 직접 법선 방향으로 생성
+            circle = Circle.Create(origin_pt, direction, MM(offset*1000))
+            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            frame_factory = getattr(g.Frame, "Create")
-            frame = frame_factory(origin_pt, direction, x_axis)
-            
-            circle_factory = getattr(g.Circle, "Create")
-            circle = circle_factory(frame, MM(offset*1000))
-            
-            cs_factory = getattr(g.CurveSegment, "Create")
-            dc_factory = getattr(DesignCurve, "Create")
-            dc = dc_factory(root, cs_factory(circle))
-            
-            # [v5.09] ExtrudeEdges 실행 안정성 강화
+            # [v5.10] ExtrudeEdges 실행 안정성 강화
             options = ExtrudeEdgeOptions()
             ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), options, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
-            return
+            # [Fallback] 전체 경로를 통한 재시도
+            try:
+                origin_pt = SpaceClaim.Api.V22.Geometry.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+                direction = SpaceClaim.Api.V22.Geometry.Direction.Create(axis[0], axis[1], axis[2])
+                circle = SpaceClaim.Api.V22.Geometry.Circle.Create(origin_pt, direction, MM(offset*1000))
+                dc = SpaceClaim.Api.V22.Modeler.DesignCurve.Create(root, SpaceClaim.Api.V22.Geometry.CurveSegment.Create(circle))
+                ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), options, None)
+                print("   [DEBUG 2-RETRY] Success with full path")
+            except Exception as re:
+                print("   [DEBUG 2-FAIL] Retry failed: " + str(re))
+                return
 
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = next((b for b in bodies_after if b not in bodies_before), None)
@@ -154,39 +149,28 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     if not targets: return
     try:
         print("   [DEBUG 1] Start split_plane for {0}".format(targets[0].Name))
-        g = SpaceClaim.Api.V22.Geometry
-        p_factory = getattr(g.Point, "Create")
-        d_factory = getattr(g.Direction, "Create")
-        
-        origin = p_factory(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
-        normal = d_factory(normal_list[0], normal_list[1], normal_list[2])
+        origin = Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
+        normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            ref = getattr(g.Direction, "DirZ")
-            if abs(normal.Z) > 0.9: ref = getattr(g.Direction, "DirX")
-            x_axis = getattr(g.Direction, "Cross")(normal, ref)
-            
-            frame_factory = getattr(g.Frame, "Create")
-            frame = frame_factory(origin, normal, x_axis)
-            
-            circle_factory = getattr(g.Circle, "Create")
-            circle = circle_factory(frame, MM(20000)) 
-            
-            cs_factory = getattr(g.CurveSegment, "Create")
-            dc_factory = getattr(DesignCurve, "Create")
-            dc = dc_factory(root, cs_factory(circle))
+            # [v5.10] 90도 회전 방지: Frame 없이 Circle을 직접 법선 방향으로 생성
+            circle = Circle.Create(origin, normal, MM(20000)) 
+            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
             try:
                 Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
             except:
-                plane_factory = getattr(g.Plane, "Create")
-                plane_obj = plane_factory(frame)
-                dp_factory = getattr(DatumPlane, "Create")
-                datum_plane = dp_factory(root, "Cutter_Plane", plane_obj)
+                # [v5.10] Frame이 꼭 필요한 경우에만 생성
+                ref = Direction.DirZ
+                if abs(normal.Z) > 0.9: ref = Direction.DirX
+                x_axis = Direction.Cross(normal, ref)
+                frame = Frame.Create(origin, normal, x_axis)
+                plane_obj = Plane.Create(frame)
+                datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
                 SplitBody.ByCutter(Selection.Create(targets), Selection.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
                 dc.Delete()
