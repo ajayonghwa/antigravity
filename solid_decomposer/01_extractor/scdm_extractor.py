@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.75] 정점 거리 분석(Vertex-Distance)을 통한 강제 반경 추출
+# [v4.76] 로직 단순화 및 전방위 디버그 로깅 (Back to Basics)
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -18,7 +18,7 @@ if 'OUTPUT_PATH' not in globals():
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     OUTPUT_PATH = os.path.join(PROJECT_ROOT, "data", "geometry_data.json")
 
-def get_face_data(face, matrix_obj, hole_db):
+def get_face_data(face, matrix_obj):
     f_id = face.GetHashCode()
     data = {
         "id": f_id, "type": "Unknown", "area": face.Area * 1e6, 
@@ -26,10 +26,10 @@ def get_face_data(face, matrix_obj, hole_db):
         "origin": [0,0,0], "axis": [0,0,1], "radius": 0.0, "is_internal": False
     }
     try:
-        shape = face.Shape
-        geom = shape.Geometry
+        geom = face.Shape.Geometry
         data["type"] = geom.GetType().Name
         
+        # 바운딩 박스 및 중심점
         bbox = face.GetBoundingBox(matrix_obj)
         data["box"]["min"] = [round(bbox.Min.X * 1000.0, 6), round(bbox.Min.Y * 1000.0, 6), round(bbox.Min.Z * 1000.0, 6)]
         data["box"]["max"] = [round(bbox.Max.X * 1000.0, 6), round(bbox.Max.Y * 1000.0, 6), round(bbox.Max.Z * 1000.0, 6)]
@@ -37,53 +37,30 @@ def get_face_data(face, matrix_obj, hole_db):
         data["origin"] = [round(c.X * 1000.0, 8), round(c.Y * 1000.0, 8), round(c.Z * 1000.0, 8)]
         
         r_raw = 0.0
-        method = ""
+        # [v4.76] 초심으로 돌아가는 반경 추출
+        # 1. 면 직접 추출
+        for attr in ["Radius", "Radius0", "MajorRadius"]:
+            if hasattr(geom, attr):
+                r_raw = getattr(geom, attr)
+                if r_raw > 1e-10: break
         
-        # 0순위: 구멍 데이터베이스
-        f_master_id = face.Master.GetHashCode() if hasattr(face, "Master") else f_id
-        if f_master_id in hole_db:
-            r_raw = hole_db[f_master_id]
-            method = "HOLE_DB"
-
-        # 1순위: 심층 속성 탐색 (v4.71 logic)
+        # 2. 모서리 추출
         if r_raw <= 0:
-            for obj in [geom, getattr(geom, "Circle", None)]:
-                if obj is None: continue
-                val = getattr(obj, "Radius", 0.0) or getattr(obj, "Radius0", 0.0)
-                if val > 1e-10: r_raw = val; method = "ATTR_DEEP"; break
-
-        # 2순위: 정점 거리 분석 (v4.75 핵심 - 최강의 백업)
-        if r_raw <= 0:
-            try:
-                # 면의 로컬 중심점 (마스터 기준)
-                l_bbox = face.GetBoundingBox(Matrix.Identity)
-                l_center = l_bbox.Center
-                
-                distances = []
-                # 모든 모서리의 정점들 조사
-                for edge in face.Edges:
-                    for v in [edge.StartVertex, edge.EndVertex]:
-                        if v is None: continue
-                        p = v.Position
-                        # 중심점과의 거리 계산 (XY평면 거리 위주로 판단 시도 가능하나 일단 3D 거리)
-                        dist = math.sqrt((p.X - l_center.X)**2 + (p.Y - l_center.Y)**2 + (p.Z - l_center.Z)**2)
-                        if dist > 1e-10: distances.append(dist)
-                
-                if len(distances) >= 2:
-                    avg_d = sum(distances) / len(distances)
-                    # 거리의 일관성 체크 (표준편차가 작아야 원형으로 간주)
-                    variance = sum((d - avg_d)**2 for d in distances) / len(distances)
-                    if math.sqrt(variance) / (avg_d + 1e-11) < 0.2: # 20% 오차 허용
-                        r_raw = avg_d
-                        method = "VERTEX_INFER"
-            except: pass
-
+            for edge in face.Edges:
+                eg = edge.Shape.Geometry
+                if hasattr(eg, "Radius"): r_raw = eg.Radius; break
+                if hasattr(eg, "Radius0"): r_raw = eg.Radius0; break
+        
+        # [DEBUG] 모든 면에 대해 상태 보고
         if r_raw > 0:
             r_mm = r_raw * 1000.0 if r_raw < 0.1 else r_raw
             data["radius"] = round(r_mm, 8)
-            if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-            print("   [{0}] Face {1} -> R={2:.4f}mm".format(method, f_id, r_mm))
-            
+            print("   [DEBUG-FOUND] Face {0} ({1}) -> Raw={2:.6f}, R={3:.4f}mm".format(f_id, data["type"], r_raw, r_mm))
+        else:
+            # 반경을 못 찾은 면들도 타입을 출력하여 힌트 확보
+            # print("   [DEBUG-SKIP] Face {0} ({1})".format(f_id, data["type"]))
+            pass
+
         if hasattr(geom, "Frame"):
             f = geom.Frame
             m = matrix_obj
@@ -92,46 +69,37 @@ def get_face_data(face, matrix_obj, hole_db):
                 round(m.M21*f.DirZ.X + m.M22*f.DirZ.Y + m.M23*f.DirZ.Z, 8),
                 round(m.M31*f.DirZ.X + m.M32*f.DirZ.Y + m.M33*f.DirZ.Z, 8)
             ]
-    except: pass
+    except Exception as e:
+        print("   [DEBUG-ERR] Face {0}: {1}".format(f_id, str(e)))
     return data
 
 def extract_geometry():
-    print("--- SCDM Vertex-Inference Extraction (v4.75) ---")
+    print("--- SCDM Back-to-Basics Extraction (v4.76) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
         if not root: root = Application.GetActiveDocument().MainPart
         
-        all_bodies = list(root.GetDescendants[IDesignBody]())
-        if not all_bodies:
-            all_bodies = list(root.Bodies)
+        # 바디 탐색 방식 이중화
+        bodies_list = list(root.GetDescendants[IDesignBody]())
+        if not bodies_list:
+            print(" - GetDescendants empty, trying manual traversal...")
+            bodies_list = list(root.Bodies)
             for comp in root.Components:
-                for b in comp.Template.Bodies: all_bodies.append(b)
+                for b in comp.Template.Bodies: bodies_list.append(b)
 
-        print(" - Processing {0} bodies...".format(len(all_bodies)))
+        print(" - Processing {0} bodies...".format(len(bodies_list)))
         
-        for i, body in enumerate(all_bodies):
-            hole_db = {}
-            try:
-                options = IdentifyHoleOptions()
-                options.MatchStandardSize = False
-                target = body.Master if hasattr(body, "Master") else body
-                holes = target.IdentifyHoles(options)
-                for h in holes:
-                    h_rad = h.HoleDiameter / 2.0
-                    for h_face in h.Faces:
-                        hole_db[h_face.GetHashCode()] = h_rad
-            except: pass
-
+        for i, body in enumerate(bodies_list):
             b_name = getattr(body, "Name", "Body_" + str(i))
             t_mat = Matrix.Identity
             if body.Instance: t_mat = body.TransformToMaster.Inverse
             
             bdata = {"body_index": i, "body_name": b_name, "volume": body.Shape.Volume * 1e9, "faces": []}
             for face in list(body.Faces):
-                bdata["faces"].append(get_face_data(face, t_mat, hole_db))
+                bdata["faces"].append(get_face_data(face, t_mat))
             final_bodies_data.append(bdata)
-            print("   [OK] Body '{0}' done.".format(b_name))
+            print("   [OK] {0} complete.".format(b_name))
                 
     except Exception as e: print(" - [FATAL] Extraction error: " + str(e))
     return final_bodies_data, [], "mm"
@@ -140,5 +108,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete (Vertex-Inference active).")
+    print("\n[FINISH] Extraction complete (v4.76 Back-to-Basics).")
 except Exception as e: print("\n[FATAL] " + str(e))
