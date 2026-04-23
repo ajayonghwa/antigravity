@@ -128,17 +128,18 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     root = GetRootPart()
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        # 가이드 실린더 생성
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-        # [v4.82] 커터 길이를 1m로 대폭 연장
-        try: ExtrudeEdges.Execute(Selection.Create(dc), 1.0, ExtrudeEdgeOptions(), None)
+        # [v4.85] 커터를 충분히 길게(10m) 뽑아 확실한 분할 유도
+        try: ExtrudeEdges.Execute(Selection.Create(dc), 10.0, ExtrudeEdgeOptions(), None)
         except: pass
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
-            print("   [OK] O-Grid applied to {0}".format(targets[0].Name))
-            # SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
+            print("   [OK] O-Grid cutter created for {0}".format(targets[0].Name))
+            # [v4.85] 주석 해제: 실제 분할 실행!
+            try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
+            except: print("   [WARN] Split failed for {0}".format(targets[0].Name))
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
     except: pass
@@ -151,16 +152,17 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     root = GetRootPart()
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        # [v4.82] 커터 크기를 10m로 확대하여 대형 모델 대응
-        circle = Circle.Create(Frame.Create(origin, normal), 10.0) 
+        circle = Circle.Create(Frame.Create(origin, normal), 20.0) # 더 크게 확장
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
         try: Fill.Execute(Selection.Create(dc), None, FillOptions(), None)
         except: pass
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
-            print("   [OK] {0} split applied to {1}".format(strategy, targets[0].Name))
-            # SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
+            print("   [OK] {0} cutter created for {1}".format(strategy, targets[0].Name))
+            # [v4.85] 주석 해제: 실제 분할 실행!
+            try: SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
+            except: print("   [WARN] Split failed for {0}".format(targets[0].Name))
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
     except: pass
