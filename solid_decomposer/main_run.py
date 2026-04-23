@@ -63,7 +63,7 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
         # 3. SCDM 실행 스크립트 생성
         generator = SCDMGenerator(project_root)
         output_filename = "scdm_decomposition_script.py"
-        output_path = generator.generate_script(all_plans, output_name=output_filename)
+        output_path = generator.generate_script(all_plans, output_name=output_filename, units=current_units)
         print(f"\n[Success] Step 3 script generated: {output_path}")
         
         # 4. 분석 결과 리포트(MD) 생성

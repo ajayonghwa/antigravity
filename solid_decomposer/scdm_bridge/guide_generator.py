@@ -19,11 +19,9 @@ class GuideGenerator:
             
             # 1. O-GRID (원통형 코어 분할)
             if "OGRID" in raw_strat:
-                # 플래너가 만든 display_offset이 있으면 우선 사용
-                display_val = plan.get('display_offset')
-                if not display_val:
-                    offset = plan.get('core_offset', 0.0)
-                    display_val = f"{offset * 1000.0:.2f}mm"
+                offset = plan.get('core_offset', 0.0)
+                # [v4.81] 이미 mm인 경우 추가 곱셈 제거
+                display_val = f"{offset:.2f}mm"
                 
                 lines.append(f"- **Action:** Create a circular O-grid core (offset: **{display_val}**).")
                 lines.append("- **Purpose:** Ensures high-quality hexa-mesh in the center of cylinders.")
@@ -34,7 +32,7 @@ class GuideGenerator:
                 if not display_pos:
                     origin = plan.get('split_plane', {}).get('origin', [0,0,0])
                     z_val = origin[2] if len(origin) > 2 else 0.0
-                    display_pos = f"{z_val * 1000.0:.2f}mm"
+                    display_pos = f"{z_val:.2f}mm"
 
                 lines.append(f"- **Action:** Split the body horizontally at **Z = {display_pos}**.")
                 lines.append("- **Purpose:** Isolate features or handle step changes in diameter.")

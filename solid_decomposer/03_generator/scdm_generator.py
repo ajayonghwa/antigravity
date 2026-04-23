@@ -10,7 +10,7 @@ class SCDMGenerator:
             try: os.makedirs(self.output_dir)
             except: self.output_dir = project_root
 
-    def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
+    def generate_script(self, plan_list, output_name="scdm_decomposition_script.py", units="mm"):
         unique_body_indices = sorted(list(set([p.get("body_index", 0) for p in plan_list])))
         body_index_to_name = {}
         for p in plan_list: body_index_to_name[p.get("body_index", 0)] = p.get("body_name", "Unknown")
@@ -21,6 +21,10 @@ class SCDMGenerator:
             bname_b64 = base64.b64encode(bname.encode('utf-8')).decode('ascii')
             comp_creation_calls += "create_body_component('{0}', {1})\n".format(bname_b64, b_idx)
 
+        # [v4.81] 스케일 팩터 결정 (SCDM API는 항상 미터 단위)
+        scale = 0.001 if units == "mm" else 1.0
+        print(f" - Generator Scale: {scale} (Input units: {units})")
+
         execution_calls = ""
         for i, plan in enumerate(plan_list):
             strat = plan.get("strategy", "").upper()
@@ -28,13 +32,14 @@ class SCDMGenerator:
             body = plan.get("body_name", "Unknown")
             body_b64 = base64.b64encode(body.encode('utf-8')).decode('ascii')
             
-            # [v4.56] KeyError Fix: 전략별로 필요한 정보만 참조
             if strat in ["OGRID", "CGRID", "RADIAL_OFFSET"]:
                 center = plan.get('center')
-                if not center: continue
-                center_m = [c * 0.001 for c in center]
+                if not center: 
+                    print(f"   [WARN] No center for {strat} on {body}")
+                    continue
+                center_m = [c * scale for c in center]
                 axis = plan.get('axis', [0,0,1])
-                offset_m = plan.get('core_offset', 1.0) * 0.001
+                offset_m = plan.get('core_offset', 1.0) * scale
                 
                 if strat == "OGRID":
                     execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, center_m, axis, offset_m, i, body_idx)
@@ -42,13 +47,15 @@ class SCDMGenerator:
                     wall_dir = plan.get('wall_direction', [0,0,1])
                     execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})\n".format(body_b64, center_m, axis, offset_m, wall_dir, i, body_idx)
                 elif strat == "RADIAL_OFFSET":
-                    r_m = plan.get('split_radius', 1.0) * 0.001
+                    r_m = plan.get('split_radius', 1.0) * scale
                     execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, center_m, axis, r_m, i, body_idx)
             
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan.get("split_plane")
-                if not split: continue
-                origin_m = [o * 0.001 for o in split['origin']]
+                if not split: 
+                    print(f"   [WARN] No split_plane for {strat} on {body}")
+                    continue
+                origin_m = [o * scale for o in split['origin']]
                 normal = split.get('normal', [0,0,1])
                 execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})\n".format(body_b64, origin_m, normal, strat, i, body_idx)
 
