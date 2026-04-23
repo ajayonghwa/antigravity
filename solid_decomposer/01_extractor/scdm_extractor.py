@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import re
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
 def get_python_matrix(m):
+    # [v4.31] ToString() 파싱을 통한 가장 보수적이고 확실한 행렬 추출
     try:
+        s = str(m)
+        # 숫자들만 모두 추출
+        nums = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", s)]
         res = [[1.0,0,0,0], [0,1.0,0,0], [0,0,1.0,0], [0,0,0,1.0]]
-        try: res[0][0] = m.M11; res[0][1] = m.M12; res[0][2] = m.M13; res[0][3] = m.M14
-        except: pass
-        try: res[1][0] = m.M21; res[1][1] = m.M22; res[1][2] = m.M23; res[1][3] = m.M24
-        except: pass
-        try: res[2][0] = m.M31; res[2][1] = m.M32; res[2][2] = m.M33; res[2][3] = m.M34
-        except: pass
-        if res[0][0] == 1.0 and res[0][3] == 0:
-            try:
-                for r in range(3):
-                    for c in range(4): res[r][c] = m.GetValue(r, c)
-            except: pass
+        if len(nums) >= 12:
+            # 3x4 또는 4x4 행렬 처리
+            res[0][0] = nums[0]; res[0][1] = nums[1]; res[0][2] = nums[2]; res[0][3] = nums[3]
+            res[1][0] = nums[4]; res[1][1] = nums[5]; res[1][2] = nums[6]; res[1][3] = nums[7]
+            res[2][0] = nums[8]; res[2][1] = nums[9]; res[2][2] = nums[10]; res[2][3] = nums[11]
         return res
-    except: return [[1.0,0,0,0], [0,1.0,0,0], [0,0,1.0,0], [0,0,0,1.0]]
+    except:
+        return [[1.0,0,0,0], [0,1.0,0,0], [0,0,1.0,0], [0,0,0,1.0]]
 
 def apply_mat(m, p):
     x = m[0][0]*p.X + m[0][1]*p.Y + m[0][2]*p.Z + m[0][3]
@@ -53,7 +53,7 @@ def get_face_data(face, matrix):
     return data
 
 def extract_geometry():
-    print("--- SCDM Unique ID Extraction (v4.29) ---")
+    print("--- SCDM Matrix String Parsing (v4.31) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
@@ -72,7 +72,6 @@ def extract_geometry():
             if hasattr(c, "Template") and c.Template: get_all_occurrences(c.Template, next_matrix)
     get_all_occurrences(root, identity)
     
-    # [v4.29] 바디 이름 고유화 강제 적용 (AUTO_BODY_0 ...)
     for i, (body, matrix) in enumerate(bodies_info):
         try:
             original_name = body.Name
