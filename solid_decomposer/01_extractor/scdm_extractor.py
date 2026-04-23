@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.74] Master 바디 기반 IdentifyHoles 호출로 속성 오류 해결
+# [v4.75] 정점 거리 분석(Vertex-Distance)을 통한 강제 반경 추출
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -39,42 +39,50 @@ def get_face_data(face, matrix_obj, hole_db):
         r_raw = 0.0
         method = ""
         
-        # 0순위: 구멍 데이터베이스 (마스터에서 가져온 정보)
-        if f_id in hole_db:
-            r_raw = hole_db[f_id]
+        # 0순위: 구멍 데이터베이스
+        f_master_id = face.Master.GetHashCode() if hasattr(face, "Master") else f_id
+        if f_master_id in hole_db:
+            r_raw = hole_db[f_master_id]
             method = "HOLE_DB"
 
-        # 1순위: 모서리 탐색
+        # 1순위: 심층 속성 탐색 (v4.71 logic)
         if r_raw <= 0:
-            for edge in face.Edges:
-                eg = edge.Shape.Geometry
-                for attr in ["Radius", "Radius0"]:
-                    val = getattr(eg, attr, 0.0)
-                    if val > 1e-10: r_raw = val; method = "EDGE_DEEP"; break
-                if r_raw > 0: break
+            for obj in [geom, getattr(geom, "Circle", None)]:
+                if obj is None: continue
+                val = getattr(obj, "Radius", 0.0) or getattr(obj, "Radius0", 0.0)
+                if val > 1e-10: r_raw = val; method = "ATTR_DEEP"; break
 
-        # 2순위: 면 탐색
+        # 2순위: 정점 거리 분석 (v4.75 핵심 - 최강의 백업)
         if r_raw <= 0:
-            for attr in ["Radius", "Radius0", "MajorRadius"]:
-                val = getattr(geom, attr, 0.0)
-                if val > 1e-10: r_raw = val; method = "FACE_DEEP"; break
-
-        # 3순위: BBox 추론
-        if r_raw <= 0:
-            l_bbox = face.GetBoundingBox(Matrix.Identity)
-            dims = sorted([l_bbox.Size.X, l_bbox.Size.Y, l_bbox.Size.Z], reverse=True)
-            if dims[1] > 1e-10:
-                if abs(dims[0] - dims[1]) / (dims[0] + 1e-11) < 0.35:
-                    r_raw = (dims[0] + dims[1]) / 4.0; method = "BBOX_INFER"
-                elif abs(dims[1] - dims[2]) / (dims[1] + 1e-11) < 0.35:
-                    r_raw = (dims[1] + dims[2]) / 4.0; method = "BBOX_INFER_SMALL"
+            try:
+                # 면의 로컬 중심점 (마스터 기준)
+                l_bbox = face.GetBoundingBox(Matrix.Identity)
+                l_center = l_bbox.Center
+                
+                distances = []
+                # 모든 모서리의 정점들 조사
+                for edge in face.Edges:
+                    for v in [edge.StartVertex, edge.EndVertex]:
+                        if v is None: continue
+                        p = v.Position
+                        # 중심점과의 거리 계산 (XY평면 거리 위주로 판단 시도 가능하나 일단 3D 거리)
+                        dist = math.sqrt((p.X - l_center.X)**2 + (p.Y - l_center.Y)**2 + (p.Z - l_center.Z)**2)
+                        if dist > 1e-10: distances.append(dist)
+                
+                if len(distances) >= 2:
+                    avg_d = sum(distances) / len(distances)
+                    # 거리의 일관성 체크 (표준편차가 작아야 원형으로 간주)
+                    variance = sum((d - avg_d)**2 for d in distances) / len(distances)
+                    if math.sqrt(variance) / (avg_d + 1e-11) < 0.2: # 20% 오차 허용
+                        r_raw = avg_d
+                        method = "VERTEX_INFER"
+            except: pass
 
         if r_raw > 0:
             r_mm = r_raw * 1000.0 if r_raw < 0.1 else r_raw
             data["radius"] = round(r_mm, 8)
             if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-            if method == "HOLE_DB":
-                print("   [HOLE] Face {0} (R={1:.4f}mm)".format(f_id, r_mm))
+            print("   [{0}] Face {1} -> R={2:.4f}mm".format(method, f_id, r_mm))
             
         if hasattr(geom, "Frame"):
             f = geom.Frame
@@ -88,7 +96,7 @@ def get_face_data(face, matrix_obj, hole_db):
     return data
 
 def extract_geometry():
-    print("--- SCDM Master Hole Extraction (v4.74) ---")
+    print("--- SCDM Vertex-Inference Extraction (v4.75) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
@@ -107,21 +115,13 @@ def extract_geometry():
             try:
                 options = IdentifyHoleOptions()
                 options.MatchStandardSize = False
-                
-                # [v4.74] Occurrence가 아닌 Master에서 IdentifyHoles 호출
                 target = body.Master if hasattr(body, "Master") else body
                 holes = target.IdentifyHoles(options)
-                
-                print("   [HOLE-DATABASE] Found {0} total holes in Master {1}".format(len(holes), i))
                 for h in holes:
                     h_rad = h.HoleDiameter / 2.0
                     for h_face in h.Faces:
-                        # 마스터 면의 HashCode를 키로 사용하거나, 인스턴스 면과 대조 필요
-                        # 간단히 모든 면을 뒤져서 대조하는 방식 사용
                         hole_db[h_face.GetHashCode()] = h_rad
-                        
-            except Exception as he:
-                print("   [WARN] IdentifyHoles failed: " + str(he))
+            except: pass
 
             b_name = getattr(body, "Name", "Body_" + str(i))
             t_mat = Matrix.Identity
@@ -129,11 +129,9 @@ def extract_geometry():
             
             bdata = {"body_index": i, "body_name": b_name, "volume": body.Shape.Volume * 1e9, "faces": []}
             for face in list(body.Faces):
-                # 마스터 면의 해시값과 현재 면의 마스터 해시값 대조
-                f_master_id = face.Master.GetHashCode() if hasattr(face, "Master") else face.GetHashCode()
                 bdata["faces"].append(get_face_data(face, t_mat, hole_db))
             final_bodies_data.append(bdata)
-            print("   [OK] Body '{0}' extraction complete.".format(b_name))
+            print("   [OK] Body '{0}' done.".format(b_name))
                 
     except Exception as e: print(" - [FATAL] Extraction error: " + str(e))
     return final_bodies_data, [], "mm"
@@ -142,5 +140,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete (Master-Aware).")
+    print("\n[FINISH] Extraction complete (Vertex-Inference active).")
 except Exception as e: print("\n[FATAL] " + str(e))
