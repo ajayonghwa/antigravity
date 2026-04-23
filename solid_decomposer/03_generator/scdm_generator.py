@@ -11,7 +11,7 @@ class SCDMGenerator:
             try: os.makedirs(self.output_dir)
             except: self.output_dir = project_root
 
-    def generate_script(self, plan_list, output_name="scdm_decomposition_script.py"):
+    def generate_script(self, plan_list, output_name="scdm_decomposition_script.py", units="m"):
         execution_calls = ""
         comp_creation_calls = ""
         print("\n[Generating Script: {0}]".format(output_name))
