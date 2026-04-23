@@ -19,7 +19,7 @@ class SCDMGenerator:
         for b_idx in unique_body_indices:
             bname = body_index_to_name[b_idx]
             bname_b64 = base64.b64encode(bname.encode('utf-8')).decode('ascii')
-            comp_creation_calls += f"create_body_component('{bname_b64}', {b_idx})\n"
+            comp_creation_calls += "create_body_component('{0}', {1})\n".format(bname_b64, b_idx)
 
         execution_calls = ""
         for i, plan in enumerate(plan_list):
@@ -27,40 +27,34 @@ class SCDMGenerator:
             body_idx = plan.get("body_index", 0)
             body = plan.get("body_name", "Unknown")
             body_b64 = base64.b64encode(body.encode('utf-8')).decode('ascii')
-            if strat == "OGRID": execution_calls += f"apply_ogrid('{body_b64}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i}, {body_idx})\n"
-            elif strat == "CGRID": execution_calls += f"apply_cgrid('{body_b64}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i}, {body_idx})\n"
-            elif strat == "RADIAL_OFFSET": execution_calls += f"apply_radial_offset('{body_b64}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i}, {body_idx})\n"
+            if strat == "OGRID":
+                execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, plan['center'], plan['axis'], plan['core_offset'], i, body_idx)
+            elif strat == "CGRID":
+                execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})\n".format(body_b64, plan['center'], plan['axis'], plan['core_offset'], plan.get('wall_direction', [0,0,1]), i, body_idx)
+            elif strat == "RADIAL_OFFSET":
+                execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, plan['center'], plan['axis'], plan['split_radius'], i, body_idx)
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan["split_plane"]
-                execution_calls += f"apply_split_plane('{body_b64}', {split['origin']}, {split['normal']}, '{strat}', {i}, {body_idx})\n"
+                execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})\n".format(body_b64, split['origin'], split['normal'], strat, i, body_idx)
 
-        script_template = f"""# -*- coding: utf-8 -*-
+        # [v4.47] f-string을 사용하지 않고 문자열 템플릿 사용 (중괄호 에러 방지)
+        template = """# -*- coding: utf-8 -*-
 import math
 import base64
 import re
 import clr
 
-# [v4.46] 매뉴얼 지침 100% 반영: 명시적 버전 참조 및 전역 네임스페이스 임포트
-def initialize_api():
-    for v in [22, 21, 20, 19, 18, 17]:
-        try:
-            clr.AddReference("SpaceClaim.Api.V{{0}}".format(v))
-            # 매뉴얼 16번 지침: 전역에 풀기
-            from SpaceClaim.Api.V{{0}} import *
-            from SpaceClaim.Api.V{{0}}.Modeler import *
-            from SpaceClaim.Api.V{{0}}.Geometry import *
-            from SpaceClaim.Api.V{{0}}.Scripting import *
-            from SpaceClaim.Api.V{{0}}.Commands import *
-            # 현재 스택에 전역화
-            globals().update(locals())
-            print(" - [INFO] API V{{0}} Loaded".format(v))
-            return True
-        except: continue
-    return False
+# [v4.47] 명시적 V22 참조 및 전역 임포트
+try:
+    clr.AddReference("SpaceClaim.Api.V22")
+    from SpaceClaim.Api.V22 import *
+    from SpaceClaim.Api.V22.Modeler import *
+    from SpaceClaim.Api.V22.Geometry import *
+    from SpaceClaim.Api.V22.Scripting import *
+    from SpaceClaim.Api.V22.Commands import *
+except: pass
 
-initialize_api()
-
-BODY_COMP_MAP = {{}}
+BODY_COMP_MAP = {}
 
 def get_all_bodies_recursive(part, body_list):
     try:
@@ -87,8 +81,8 @@ def create_body_component(name_b64, body_idx):
     root = GetRootPart()
     try: t_name = base64.b64decode(name_b64).decode('utf-8')
     except: t_name = name_b64
-    safe_name = "".join(c for c in t_name if c.isalnum() or c == u"_")
-    comp_name = "CUTTERS_FOR_{{0}}_{{1}}".format(safe_name, body_idx)
+    safe_name = "".join(c for c in t_name if c.isalnum() or c == "_")
+    comp_name = "CUTTERS_FOR_{0}_{1}".format(safe_name, body_idx)
     target_comp = None
     for comp in root.Components:
         if comp.Name == comp_name: target_comp = comp; break
@@ -104,19 +98,16 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # 매뉴얼 2번 지침: ComponentHelper 우선 사용
+        # 매뉴얼 지침: ComponentHelper 우선 사용
         ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
         return True
-    except Exception as e:
-        print(" [DEBUG] MoveBodiesToComponent failed: " + str(e))
+    except:
         try:
-            # 보조 수단: MoveToComponent 명령어 (전역 임포트 덕분에 바로 사용 가능)
             MoveToComponent.Execute(Selection.Create(body), target_comp, True, None)
             return True
-        except Exception as e2:
-            print(" [DEBUG] MoveToComponent failed: " + str(e2))
+        except:
             try:
-                # 최후의 수단: 매뉴얼 12번 지침 (Copy/Delete)
+                # 매뉴얼 12번 지침: Copy/Delete
                 new_shape = body.Shape.Copy()
                 DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
                 body.Delete()
@@ -135,12 +126,12 @@ def _safe_split_multi(targets, cutter_face):
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
-        # [매뉴얼 2번 지침] SplitBody.ByCutter (4인자 규칙)
+        # 매뉴얼 2번 지침: ByCutter (4인자)
         SplitBody.ByCutter(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
         return True
-    except Exception as e:
-        print(" [DEBUG] SplitBody.ByCutter failed: " + str(e))
-        return False
+    except:
+        try: SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
+        except: return False
 
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
@@ -153,7 +144,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        # [매뉴얼 2번 지침] ExtrudeEdges.ByDistance
         try: ExtrudeEdges.ByDistance(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
         except: ExtrudeEdges.Execute(Selection.Create(design_curve), 20.0, ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
@@ -177,10 +167,8 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         radius = _get_dynamic_cutter_radius()
         circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        # [매뉴얼 2번 지침] Fill.By (또는 Execute)
         try: Fill.By(Selection.Create(design_curve))
         except: Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
-        
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
@@ -192,11 +180,14 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
 
 def finalize(): print(" --- Finished ---")
 # --- INITIALIZATION ---
-{comp_creation_calls}
+REPLACE_COMP_CREATION
 # --- EXECUTION ---
-{execution_calls}
+REPLACE_EXECUTION
 finalize()
 """
+        script_content = template.replace("REPLACE_COMP_CREATION", comp_creation_calls)
+        script_content = script_content.replace("REPLACE_EXECUTION", execution_calls)
+        
         output_path = os.path.join(self.output_dir, output_name)
-        with open(output_path, "w", encoding="utf-8") as f: f.write(script_template)
+        with open(output_path, "w") as f: f.write(script_content)
         return output_path
