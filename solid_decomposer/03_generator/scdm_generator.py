@@ -87,9 +87,13 @@ def _create_cylindrical_cutter(origin_pt, direction, radius):
     '''원통형 커터 생성 (V22 최적화)'''
     try:
         root = GetRootPart()
-        bbox = root.Range
-        diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
-        extrude_dist = max(diag * 1.5, 0.1)
+        # V22 호환성을 위해 다양한 속성명 시도
+        bbox = getattr(root, 'Range', getattr(root, 'Extent', getattr(root, 'BoundingBox', None)))
+        if bbox:
+            diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
+            extrude_dist = max(diag * 2.0, 0.1)
+        else:
+            extrude_dist = 1.0
         
         shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
                                       origin_pt.Y - direction.Y * extrude_dist/2, 
@@ -150,9 +154,14 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     root = GetRootPart()
     
     try:
-        bbox = root.Range
-        huge_radius = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2) * 1.5
-        
+        # 모델 크기에 비례한 충분히 큰 커터 생성
+        bbox = getattr(root, 'Range', getattr(root, 'Extent', getattr(root, 'BoundingBox', None)))
+        if bbox:
+            diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
+            huge_radius = diag * 2.0
+        else:
+            huge_radius = 1.0
+            
         circle_geom = Circle.Create(frame, huge_radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
         
