@@ -202,7 +202,7 @@ class StrategyPlanner:
         # 1. 구멍 크기순 정렬 (큰 것 우선)
         holes.sort(key=lambda h: h.get("radius", 0), reverse=True)
         
-        # 2. 각 구멍별 최단 이웃 거리 계산
+        # [v4.7] 3. 간섭을 고려한 O-Grid 계획
         for i, h1 in enumerate(holes):
             o1 = np.array(h1.get("origin", [0,0,0]))
             r1 = h1.get("radius", 0)
@@ -215,8 +215,9 @@ class StrategyPlanner:
                 gap = dist - (r1 + h2.get("radius", 0))
                 if gap < min_gap: min_gap = gap
             
-            # 3. 간섭을 고려한 O-Grid 계획
-            plans.extend(self._plan_ogrid_for_hole(h1, main_axis, neighbor_gap=min_gap))
+            # [v4.7] 첫 번째(가장 큰) 구멍은 안전 장치를 더 느슨하게 적용
+            is_main = (i == 0)
+            plans.extend(self._plan_ogrid_for_hole(h1, main_axis, neighbor_gap=min_gap, is_main=is_main))
             
         # [v4.4 추가] 원판 전체에 대한 4분할(Sector) - 가장 큰 구멍(또는 바디 센터) 기준
         if len(holes) > 0:
@@ -345,45 +346,40 @@ class StrategyPlanner:
             "split_plane": {"origin": [float(x) for x in origin], "normal": [float(x) for x in normal]}
         }
 
-    def _plan_ogrid_for_hole(self, hole, axis, neighbor_gap=None):
+    def _plan_ogrid_for_hole(self, hole, axis, neighbor_gap=None, is_main=False):
         radius = hole.get("radius", 0)
-        if radius < 0.0005: return [] 
+        if radius < 0.0001: 
+            print("    [SKIP] Radius too small: {0:.4f}mm".format(radius*1000))
+            return [] 
         
-        # [v4.3] 내경(Hole)인 경우 바깥쪽으로, 외경인 경우 안쪽으로 오프셋 설정
         is_internal = hole.get("is_internal", True)
         if is_internal:
-            # 구멍 바깥쪽 솔리드를 잘라야 함
             safe_offset = radius * 1.3
-            # 간섭 체크: 이웃과의 간격이 좁으면 오프셋을 줄임
             if neighbor_gap is not None and neighbor_gap < (safe_offset - radius) * 2:
                 safe_offset = radius + (neighbor_gap * 0.4)
         else:
-            # 실린더 내부를 잘라야 함
             safe_offset = radius * 0.7
             
-        print("    >> Hole at {0}: Radius={1:.2f}, Offset={2:.2f} ({3})".format(
-            [round(x*1000,1) for x in hole.get("origin", [0,0,0])], 
-            radius*1000, safe_offset*1000, 
-            "Internal/Hole" if is_internal else "External"
-        ))
-
-        # [v4.3.1] 바디 외곽까지의 최소 거리 (WHR/Rib Safety 체크)
         origin = np.array(hole.get("origin", self.body_center))
         min_wall_dist = float('inf')
         for i in range(3):
-            if abs(axis[i]) < 0.5: # 축 방향 제외
+            if abs(axis[i]) < 0.5:
                 d1 = abs(origin[i] - (self.body_center[i] - self.body_size[i]/2))
                 d2 = abs(origin[i] - (self.body_center[i] + self.body_size[i]/2))
                 min_wall_dist = min(min_wall_dist, d1, d2)
         
-        # 남은 벽 두께(Rib thickness) 계산
         rib_thickness = min_wall_dist - radius
         
-        # [v4.4] 안전 마진 완화 (메인 구멍 누락 방지)
-        if rib_thickness < radius * 0.1 or (safe_offset > min_wall_dist * 0.98 and radius < 0.05):
-            print("    !! Safety Skip: Rib too thin ({0:.2f}mm) for radius {1:.1f}mm".format(rib_thickness * 1000, radius*1000))
+        # [v4.7] 메인 구멍은 웬만하면 스킵하지 않음
+        safety_limit = radius * 0.1 if not is_main else 0.0001 # 메인 구멍은 0.1mm만 있어도 진행
+        
+        if rib_thickness < safety_limit:
+            print("    [SKIP] Rib too thin: {0:.2f}mm (Limit: {1:.2f}mm) for Hole at {2}".format(
+                rib_thickness*1000, safety_limit*1000, [round(x*1000,1) for x in origin]))
             return []
             
+        print("    [PLAN] O-Grid for hole at {0}: Offset={1:.2f}mm".format(
+            [round(x*1000,1) for x in origin], safe_offset*1000))
         return [self._create_ogrid_dict(hole, axis, safe_offset)]
 
     def _create_ogrid_dict(self, hole, axis, offset):
