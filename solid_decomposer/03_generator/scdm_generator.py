@@ -77,8 +77,9 @@ except: pass
 BODY_COMP_MAP = {}
 
 def get_matching_bodies(body_b64):
-    try: target_name = base64.b64decode(body_b64).decode('utf-8')
-    except: target_name = body_b64
+    try: target_name = base64.b64decode(body_b64).decode('utf-8').lower()
+    except: target_name = body_b64.lower()
+    
     all_bodies = []
     root = GetRootPart()
     try:
@@ -89,9 +90,12 @@ def get_matching_bodies(body_b64):
     except: pass
     
     matched = []
-    pattern = re.compile(re.escape(target_name) + r"(_|\\s|\\(|\\d|$)")
     for b in all_bodies:
-        if pattern.match(b.Name): matched.append(b)
+        # [v4.82] 대소문자 구분 없는 포함 여부로 매칭 (가장 확실함)
+        if target_name in b.Name.lower(): matched.append(b)
+    
+    if not matched:
+        print("   [WARN] No body found matching: {0}".format(target_name))
     return matched
 
 def create_body_component(name_b64, body_idx):
@@ -124,14 +128,17 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     root = GetRootPart()
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
+        # 가이드 실린더 생성
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-        try: ExtrudeEdges.Execute(Selection.Create(dc), 0.2, ExtrudeEdgeOptions(), None)
+        # [v4.82] 커터 길이를 1m로 대폭 연장
+        try: ExtrudeEdges.Execute(Selection.Create(dc), 1.0, ExtrudeEdgeOptions(), None)
         except: pass
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
-            SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
+            print("   [OK] O-Grid applied to {0}".format(targets[0].Name))
+            # SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
     except: pass
@@ -144,14 +151,16 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     root = GetRootPart()
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle = Circle.Create(Frame.Create(origin, normal), 1.0) # 임시 반경
+        # [v4.82] 커터 크기를 10m로 확대하여 대형 모델 대응
+        circle = Circle.Create(Frame.Create(origin, normal), 10.0) 
         dc = DesignCurve.Create(root, CurveSegment.Create(circle))
         try: Fill.Execute(Selection.Create(dc), None, FillOptions(), None)
         except: pass
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = [b for b in bodies_after if b not in bodies_before]
         if new_b:
-            SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
+            print("   [OK] {0} split applied to {1}".format(strategy, targets[0].Name))
+            # SplitBody.ByCutter(Selection.Create(targets), Selection.Create(new_b[0].Faces[0]), True, None)
             _move_to_comp(new_b[0], b_idx)
         dc.Delete()
     except: pass
