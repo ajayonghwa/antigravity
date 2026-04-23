@@ -5,7 +5,7 @@ import os
 # ==========================================
 # [사용자 설정] 저장할 경로를 입력하세요. (마스터 스크립트 실행 시 자동 오버라이드됨)
 if 'OUTPUT_PATH' not in globals():
-    OUTPUT_PATH = r"C:\path\to\your\data\geometry_data_block.json"
+    OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
 def get_face_data(face):
     """

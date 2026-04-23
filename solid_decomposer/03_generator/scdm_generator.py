@@ -23,7 +23,7 @@ class SCDMGenerator:
                 execution_calls += call
                 print(f"   -> Added O-GRID split for {body}")
             elif strat == "CGRID":
-                call = f"apply_cgrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan['wall_direction']}, {i})\n"
+                call = f"apply_cgrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i})\n"
                 execution_calls += call
                 print(f"   -> Added C-GRID split for {body}")
             elif strat == "RADIAL_OFFSET":
@@ -59,51 +59,39 @@ def initialize_api():
 
 initialize_api()
 
-ALL_CUTTERS = []
+# 전역 커터 목록 초기화
+if 'ALL_CUTTERS' not in globals():
+    ALL_CUTTERS = []
 
 def make_all_bodies_independent():
-    '''패턴/인스턴스로 공유된 바디를 모두 독립화 (3.1 추가)'''
+    '''패턴/인스턴스로 공유된 바디를 모두 독립화'''
     try:
         root = GetRootPart()
-        components = root.Components
-        if components and components.Count > 0:
-            for comp in components:
-                try:
-                    comp_bodies = comp.Content.Bodies if comp.Content else []
-                    for body in comp_bodies:
-                        try:
-                            # 바디 복사 후 원본 삭제 방식의 독립화
-                            shape_copy = body.Shape.Copy()
-                            new_body = DesignBody.Create(root, body.Name + "_indep", shape_copy)
-                            body.Delete()
-                        except: pass
-                except: continue
+        bodies = list(root.GetAllBodies())
+        for body in bodies:
+            try:
+                # 바디 복사 후 원본 삭제 방식의 독립화
+                shape_copy = body.Shape.Copy()
+                new_body = DesignBody.Create(root, body.Name + "_indep", shape_copy)
+                body.Delete()
+            except: pass
     except Exception as e:
         print("Pattern independence failed: " + str(e))
 
 def get_matching_bodies(target_base):
-    '''이름 기반 3단계 매칭 (Fragment 추적 포함)'''
+    '''이름 기반 3단계 매칭'''
     all_bodies = GetRootPart().GetAllBodies()
     matched = []
     for body in all_bodies:
         b_name = body.Name
         if b_name == target_base or b_name.startswith(target_base + " "):
             matched.append(body)
-            continue
-        # Attribute 매칭 (필요시 활성화)
-        # try:
-        #     val = clr.Reference[System.String]()
-        #     if body.TryGetTextAttribute("AutoDecomp.UniqueID", val):
-        #         if val.Value == target_base or val.Value.startswith(target_base):
-        #             matched.append(body)
-        # except: pass
     return matched
 
-def _create_cylindrical_cutter(origin_pt, direction, radius, is_half=False, wall_dir=None):
+def _create_cylindrical_cutter(origin_pt, direction, radius):
     '''동적 스케일링이 적용된 원통형 커터 생성'''
     try:
         bbox = GetRootPart().Range
-        # 모델 전체 길이를 기반으로 충분히 긴 커터 생성
         diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
         extrude_dist = max(diag * 1.5, 0.1)
     except:
@@ -121,27 +109,19 @@ def _create_cylindrical_cutter(origin_pt, direction, radius, is_half=False, wall
     try:
         bodies_before = list(GetRootPart().GetAllBodies())
         sel = Selection.Create(design_curve)
-        
         try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
         except: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
         
         bodies_after = list(GetRootPart().GetAllBodies())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
-        if new_bodies:
-            tool_body = new_bodies[0]
-    except Exception as e:
-        print("Extrude error: " + str(e))
-        
-    design_curve.Delete()
+        if new_bodies: tool_body = new_bodies[0]
+    except: pass
     
-    if tool_body and is_half and wall_dir:
-        # C-Grid용 반원통 만들기 로직 (평면으로 절반 자르기)
-        # 구현은 생략하고 원통을 그대로 사용하되 향후 고도화 가능
-        pass
-        
+    design_curve.Delete()
     return tool_body
 
 def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
+    global ALL_CUTTERS
     origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
     direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
     
@@ -155,6 +135,7 @@ def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
             except: pass
 
 def apply_radial_offset(target_full_name, center_list, axis_list, split_radius, idx):
+    global ALL_CUTTERS
     origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
     direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
     
@@ -168,21 +149,18 @@ def apply_radial_offset(target_full_name, center_list, axis_list, split_radius, 
             except: pass
 
 def apply_cgrid(target_full_name, center_list, axis_list, core_offset, wall_dir, idx):
-    # C-Grid는 현재 O-Grid와 동일하게 처리하나, 향후 반원으로 개선
     apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx)
 
 def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
+    global ALL_CUTTERS
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     frame = Frame.Create(origin, normal)
     
     try:
-        try:
-            bbox = GetRootPart().Range
-            diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
-            huge_radius = max(diag * 1.5, 0.1)
-        except:
-            huge_radius = 5.0
+        bbox = GetRootPart().Range
+        diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
+        huge_radius = max(diag * 1.5, 0.1)
             
         circle_geom = Circle.Create(frame, huge_radius)
         design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom))
@@ -209,6 +187,7 @@ def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx)
         print(strategy + " split error: " + str(e))
 
 def finalize():
+    global ALL_CUTTERS
     if ALL_CUTTERS:
         try:
             for cutter in ALL_CUTTERS:
@@ -218,7 +197,7 @@ def finalize():
         except: pass
 
 # --- Execution ---
-make_all_bodies_independent()
+# make_all_bodies_independent() # 필요 시 활성화
 {execution_calls}
 finalize()
 """

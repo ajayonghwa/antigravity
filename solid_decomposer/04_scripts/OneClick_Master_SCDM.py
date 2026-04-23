@@ -14,24 +14,23 @@ import System
 from System.Diagnostics import Process, ProcessStartInfo
 
 # ------------------------------------------------------------------------------
-# [사용자 설정] 아래 경로들을 본인의 Windows 환경에 맞게 수정하세요.
-# (맥(Mac)의 공유 폴더를 윈도우에서 접근하는 경우, 윈도우에서 보이는 드라이브 경로(예: Z:\...)를 입력해야 합니다)
+# [사용자 설정] 경로 설정 (윈도우 환경에 맞춤)
 # ------------------------------------------------------------------------------
-PROJECT_ROOT = r"C:\path\to\your\solid_decomposer" 
+PROJECT_ROOT = r"D:\yhheo\py_programs_by_yh\solid_decomposer" 
 
-# 외부 CPython 실행 파일 경로 (가상환경이 있다면 가상환경의 python.exe 경로)
-# 예: r"C:\path\to\your\solid_decomposer\.venv\Scripts\python.exe"
-PYTHON_EXE = r"python" 
+# 외부 CPython 실행 파일 경로
+PYTHON_EXE = r"python" # 가상환경 사용 시 해당 경로로 변경 권장
 
 # ------------------------------------------------------------------------------
 # 내부 경로 자동 설정
 EXTRACTOR_PATH = os.path.join(PROJECT_ROOT, "01_extractor", "scdm_extractor.py")
 MAIN_RUN_PATH = os.path.join(PROJECT_ROOT, "main_run.py")
 GENERATED_SCRIPT_PATH = os.path.join(PROJECT_ROOT, "04_scripts", "scdm_decomposition_script.py")
+DATA_PATH = os.path.join(PROJECT_ROOT, "data", "geometry_data.json")
 
 def run_master_pipeline():
     print("=" * 50)
-    print("🚀 AntiGravity One-Click Pipeline Started")
+    print("🚀 AntiGravity One-Click Pipeline Started (v3.2)")
     print("=" * 50)
 
     # 1단계: 형상 데이터 추출
@@ -40,14 +39,11 @@ def run_master_pipeline():
         print("Error: Extractor script not found at " + EXTRACTOR_PATH)
         return
     try:
-        # 데이터 저장 경로 강제 지정
-        DATA_PATH = os.path.join(PROJECT_ROOT, "data", "geometry_data.json")
-        
-        # Extractor 스크립트를 읽어서 실행하되, OUTPUT_PATH를 현재 컨텍스트에서 오버라이드
+        # Extractor 실행 시 OUTPUT_PATH를 전역으로 주입
         with open(EXTRACTOR_PATH, 'r') as f:
-            # globals()를 넘겨서 SpaceClaim API 함수들에 접근 가능하게 함
-            # 로컬 변수로 OUTPUT_PATH를 주입
-            exec(f.read(), globals(), {'OUTPUT_PATH': DATA_PATH})
+            extractor_code = f.read()
+            # globals()를 넘기고 locals에 OUTPUT_PATH를 넣어 정의 충돌 방지
+            exec(extractor_code, globals(), {'OUTPUT_PATH': DATA_PATH})
         print(" -> Extraction Completed: " + DATA_PATH)
     except Exception as e:
         print(" -> Extraction Failed: " + str(e))
@@ -56,19 +52,16 @@ def run_master_pipeline():
     # 2단계: 외부 파이썬(CPython) 플래너 호출
     print("\n[Step 2] Calling External AI Planner...")
     try:
-        # CPython 실행을 위한 프로세스 설정
         start_info = ProcessStartInfo()
         start_info.FileName = PYTHON_EXE
-        # 인자 전달: [main_run.py 경로] [기기이름] [JSON파일명]
-        # JSON 경로는 파일명만 전달 (ExtractManager가 data/ 폴더에서 찾음)
-        input_json_name = os.path.basename(DATA_PATH)
-        start_info.Arguments = '"{0}" DEVICE {1}'.format(MAIN_RUN_PATH, input_json_name)
+        # 인자 전달: [main_run.py] [기기이름] [JSON파일명]
+        start_info.Arguments = '"{0}" DEVICE geometry_data.json'.format(MAIN_RUN_PATH)
         start_info.WorkingDirectory = PROJECT_ROOT
         start_info.UseShellExecute = False
-        start_info.CreateNoWindow = True # 검은색 CMD 창 숨기기
+        start_info.CreateNoWindow = True
         
         process = Process.Start(start_info)
-        process.WaitForExit() # 외부 파이썬 작업이 끝날 때까지 스페이스클레임 대기
+        process.WaitForExit()
         
         if process.ExitCode == 0:
             print(" -> Planning & Script Generation Completed.")
@@ -86,7 +79,8 @@ def run_master_pipeline():
         return
     try:
         with open(GENERATED_SCRIPT_PATH, 'r') as f:
-            exec(f.read())
+            # Step 3 실행 시에도 globals()를 넘겨서 API와 ALL_CUTTERS 등에 접근 가능하게 함
+            exec(f.read(), globals())
         print(" -> Decomposition Execution Completed Successfully!")
     except Exception as e:
         print(" -> Execution Failed: " + str(e))
