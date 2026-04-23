@@ -27,15 +27,14 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += f"apply_split_plane('{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
-        # [v4.20] 커터 폴더(Component) 생성 시 Part.Create를 거치도록 API 정석 수정
-        # 네이티브 IDesignBody 계층 탐색을 통해 좌표 문제 원천 차단
+        # [v4.21] SplitBody를 먼저 수행한 뒤에 커터를 컴포넌트로 이동시킵니다.
+        # 서로 다른 컴포넌트에 있는 템플릿과 인스턴스 간의 불리언 연산은 스페이스클레임에서 실패하기 때문입니다.
         script_template = f"""# -*- coding: utf-8 -*-
 import math
 
 ALL_CUTTERS = []
 
 def get_all_bodies_recursive(part, body_list):
-    # V22의 가장 강력하고 확실한 월드 좌표 바디 수집기 (GetDescendants)
     try:
         for b in part.GetDescendants[IDesignBody]():
             body_list.append(b)
@@ -73,18 +72,16 @@ def _get_target_cutter_comp(target_body_name):
     safe_name = "".join(c for c in t_name if c.isalnum() or c == u"_")
     comp_name = "CUTTERS_FOR_" + safe_name
     
-    # 이미 있는지 확인
     for comp in root.Components:
         if comp.Name == comp_name: return comp
         
-    # 없으면 새로 생성 (API V22 방식: Part 먼저 만들고 Component로 인스턴스화)
     try:
         new_part = Part.Create(root.Document, comp_name)
         new_comp = Component.Create(root, new_part)
         return new_comp
     except Exception as e:
         print("    [WARN] Failed to create component: " + str(e))
-        return root # 실패시 루트 파트에 둠
+        return root
 
 def _safe_split(target_body, cutter_face):
     try:
@@ -133,9 +130,7 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
         
         if tool:
             tool.Name = name
-            parent_comp = _get_target_cutter_comp(target_body.Name)
-            try: tool.SetParent(parent_comp)
-            except: pass
+            # [v4.21] 여기서는 생성만 하고 이동은 Split 이후에 하도록 부모 변경을 삭제함.
             return tool
         return None
     except: return None
@@ -165,10 +160,17 @@ def apply_ogrid(target_name, center, axis, offset, idx):
                     break
             if not cutter_face: cutter_face = tool.Faces[0]
             
+            # [v4.21] 커터가 루트(동일 컨텍스트)에 있을 때 먼저 자릅니다!
             if _safe_split(target, cutter_face):
                 print("    [OK] Split Success")
             else:
                 print("    [FAIL] Split failed")
+                
+            # 자르기가 끝난 뒤에 비로소 컴포넌트로 치웁니다.
+            try:
+                parent_comp = _get_target_cutter_comp(target.Name)
+                tool.SetParent(parent_comp)
+            except: pass
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
@@ -207,14 +209,20 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
             
             if tool:
                 tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
-                parent_comp = _get_target_cutter_comp(target.Name)
-                try: tool.SetParent(parent_comp)
-                except: pass
                 ALL_CUTTERS.append(tool)
+                
+                # [v4.21] 커터가 루트(동일 컨텍스트)에 있을 때 먼저 자릅니다!
                 if _safe_split(target, tool.Faces[0]):
                     print("    [OK] Split Success")
                 else:
                     print("    [FAIL] Split failed")
+                    
+                # 자르기가 끝난 뒤에 비로소 컴포넌트로 치웁니다.
+                try:
+                    parent_comp = _get_target_cutter_comp(target.Name)
+                    tool.SetParent(parent_comp)
+                except: pass
+                
             design_curve.Delete()
         except: pass
 
