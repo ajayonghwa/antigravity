@@ -3,23 +3,32 @@ import json
 import os
 import clr
 
-# [매뉴얼 15번 지침] V22~V17 역순으로 참조 추가하는 동적 초기화
-def initialize_scdm_api():
-    for v in range(22, 16, -1):
-        try:
-            ref_name = "SpaceClaim.Api.V" + str(v)
-            clr.AddReference(ref_name)
-            # 성공 시 해당 버전의 네임스페이스 반환
-            return v
-        except: continue
+# [v4.44] 버전 번호를 명시하지 않는 표준 임포트 방식으로 회귀
+def setup_api():
+    try:
+        # 버전 없이 시도 (이미 로드된 환경 대응)
+        import SpaceClaim.Api as Api
+        return Api
+    except:
+        # 실패 시 V22~V17 강제 참조 시도
+        for v in [22, 21, 20, 19, 18, 17]:
+            try:
+                clr.AddReference("SpaceClaim.Api.V" + str(v))
+                exec("import SpaceClaim.Api.V{0} as Api".format(v))
+                return Api
+            except: continue
     return None
 
-API_VER = initialize_scdm_api()
-if API_VER:
-    # 동적 임포트 (전역 네임스페이스에 풀기 - 매뉴얼 16번)
-    exec("from SpaceClaim.Api.V{0} import *".format(API_VER))
-    exec("from SpaceClaim.Api.V{0}.Modeler import *".format(API_VER))
-    exec("from SpaceClaim.Api.V{0}.Geometry import *".format(API_VER))
+API = setup_api()
+
+# 전역 접근을 위한 매핑
+def get_scdm_obj(path_str):
+    try:
+        parts = path_str.split('.')
+        obj = API
+        for p in parts: obj = getattr(obj, p)
+        return obj
+    except: return None
 
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
@@ -27,26 +36,18 @@ if 'OUTPUT_PATH' not in globals():
 def get_python_matrix_from_obj(m):
     res = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
     try:
-        if hasattr(m, "Translation"):
-            t = m.Translation
-            res[0][3] = t.X; res[1][3] = t.Y; res[2][3] = t.Z
-        if hasattr(m, "Rotation"):
-            r = m.Rotation
-            try:
-                res[0][0]=r.M11; res[0][1]=r.M12; res[0][2]=r.M13
-                res[1][0]=r.M21; res[1][1]=r.M22; res[1][2]=r.M23
-                res[2][0]=r.M31; res[2][1]=r.M32; res[2][2]=r.M33
-            except:
-                for row in range(3):
-                    for col in range(3): res[row][col] = r.GetValue(row, col)
+        t = m.Translation
+        res[0][3] = t.X; res[1][3] = t.Y; res[2][3] = t.Z
+        r = m.Rotation
+        try:
+            res[0][0]=r.M11; res[0][1]=r.M12; res[0][2]=r.M13
+            res[1][0]=r.M21; res[1][1]=r.M22; res[1][2]=r.M23
+            res[2][0]=r.M31; res[2][1]=r.M32; res[2][2]=r.M33
+        except:
+            for row in range(3):
+                for col in range(3): res[row][col] = r.GetValue(row, col)
     except: pass
     return res
-
-def apply_mat(m, p):
-    x = m[0][0]*p.X + m[0][1]*p.Y + m[0][2]*p.Z + m[0][3]
-    y = m[1][0]*p.X + m[1][1]*p.Y + m[1][2]*p.Z + m[1][3]
-    z = m[2][0]*p.X + m[2][1]*p.Y + m[2][2]*p.Z + m[2][3]
-    return [x, y, z]
 
 def get_face_data(face, matrix):
     f_id = face.GetHashCode()
@@ -57,38 +58,43 @@ def get_face_data(face, matrix):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
-            # 4.43: Matrix.Identity를 동적으로 가져옴
-            from SpaceClaim.Api.V22.Geometry import Matrix as ScMatrix
-            bbox = face.GetBoundingBox(ScMatrix.Identity)
-            data["origin"] = [bbox.Center.X, bbox.Center.Y, bbox.Center.Z]
-            f = geom.Frame
-            data["axis"] = [
-                matrix[0][0]*f.DirZ.X + matrix[0][1]*f.DirZ.Y + matrix[0][2]*f.DirZ.Z,
-                matrix[1][0]*f.DirZ.X + matrix[1][1]*f.DirZ.Y + matrix[1][2]*f.DirZ.Z,
-                matrix[2][0]*f.DirZ.X + matrix[2][1]*f.DirZ.Y + matrix[2][2]*f.DirZ.Z
-            ]
+            
+            # [v4.44] Matrix.Identity를 안전하게 가져옴
+            sc_mat_cls = get_scdm_obj("Geometry.Matrix")
+            if sc_mat_cls:
+                bbox = face.GetBoundingBox(sc_mat_cls.Identity)
+                data["origin"] = [bbox.Center.X, bbox.Center.Y, bbox.Center.Z]
+                f = geom.Frame
+                data["axis"] = [
+                    matrix[0][0]*f.DirZ.X + matrix[0][1]*f.DirZ.Y + matrix[0][2]*f.DirZ.Z,
+                    matrix[1][0]*f.DirZ.X + matrix[1][1]*f.DirZ.Y + matrix[1][2]*f.DirZ.Z,
+                    matrix[2][0]*f.DirZ.X + matrix[2][1]*f.DirZ.Y + matrix[2][2]*f.DirZ.Z
+                ]
+                data["box"]["min"] = [bbox.Min.X, bbox.Min.Y, bbox.Min.Z]
+                data["box"]["max"] = [bbox.Max.X, bbox.Max.Y, bbox.Max.Z]
+            
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
                 if str(shape.Orientation) == "Reversed": data["is_internal"] = True
-        bbox = face.GetBoundingBox(ScMatrix.Identity)
-        data["box"]["min"] = [bbox.Min.X, bbox.Min.Y, bbox.Min.Z]
-        data["box"]["max"] = [bbox.Max.X, bbox.Max.Y, bbox.Max.Z]
     except: pass
     return data
 
 def extract_geometry():
-    print("--- SCDM Dynamic API Extraction (v4.43) ---")
+    print("--- SCDM Safe API Extraction (v4.44) ---")
     all_bodies_data = []
     root = GetRootPart()
-    try: bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
-    except: bodies = list(root.GetDescendants[IDesignBody]())
+    try:
+        try: bodies = list(Window.ActiveWindow.GetAllOccurrences[IDesignBody]())
+        except: bodies = list(root.GetDescendants[IDesignBody]())
+    except: bodies = []
+    
     print(" - Found {0} bodies".format(len(bodies)))
 
     for i, body in enumerate(bodies):
         matrix_py = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
         try:
-            comp = body.ParentComponent if hasattr(body, "ParentComponent") else None
-            if not comp and hasattr(body, "OccurrenceParent"): comp = body.OccurrenceParent
+            comp = getattr(body, "ParentComponent", None)
+            if not comp: comp = getattr(body, "OccurrenceParent", None)
             if comp: matrix_py = get_python_matrix_from_obj(comp.TransformToRoot)
         except: pass
         

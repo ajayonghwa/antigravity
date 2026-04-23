@@ -40,23 +40,28 @@ import base64
 import re
 import clr
 
-# [매뉴얼 15번 지침] 동적 API 초기화 로직
-def initialize_scdm_api():
-    for v in range(22, 16, -1):
-        try:
-            ref_name = "SpaceClaim.Api.V" + str(v)
-            clr.AddReference(ref_name)
-            return v
-        except: continue
+# [v4.44] 버전 무관 안전한 API 초기화
+def setup_api():
+    try:
+        import SpaceClaim.Api as Api
+        return Api
+    except:
+        for v in [22, 21, 20, 19, 18, 17]:
+            try:
+                clr.AddReference("SpaceClaim.Api.V" + str(v))
+                exec("import SpaceClaim.Api.V{{0}} as Api".format(v))
+                return Api
+            except: continue
     return None
 
-API_VER = initialize_scdm_api()
-if API_VER:
-    # 전역 네임스페이스 로드 (매뉴얼 16번)
-    exec("from SpaceClaim.Api.V{0} import *".format(API_VER))
-    exec("from SpaceClaim.Api.V{0}.Modeler import *".format(API_VER))
-    exec("from SpaceClaim.Api.V{0}.Geometry import *".format(API_VER))
-    # Commands는 exec를 통해 명시적 호출 없이 사용 가능해짐
+SCDM_API = setup_api()
+
+def get_api_obj(path):
+    try:
+        obj = SCDM_API
+        for p in path.split('.'): obj = getattr(obj, p)
+        return obj
+    except: return None
 
 BODY_COMP_MAP = {{}}
 
@@ -75,7 +80,7 @@ def get_matching_bodies(body_b64):
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
     matched = []
-    pattern = re.compile(re.escape(target_name) + r"(_|\s|\(|\d|$)")
+    pattern = re.compile(re.escape(target_name) + r"(_|\\s|\\(|\\d|$)")
     for b in all_bodies:
         if pattern.match(b.Name): matched.append(b)
     return matched
@@ -102,12 +107,21 @@ def _move_body_to_comp(body, body_idx):
     target_comp = BODY_COMP_MAP.get(body_idx)
     if not target_comp: return False
     try:
-        # [매뉴얼 지침] ComponentHelper를 통한 이동
-        ComponentHelper.MoveBodiesToComponent(Selection.Create(body), target_comp)
+        # [v4.44] ComponentHelper 안전 호출
+        helper = get_api_obj("Modeler.ComponentHelper")
+        if helper:
+            helper.MoveBodiesToComponent(Selection.Create(body), target_comp)
+            return True
+        # 백업: MoveToComponent 명령어
+        cmd = get_api_obj("Commands.MoveToComponent")
+        if cmd:
+            cmd.Execute(Selection.Create(body), target_comp, True, None)
+            return True
+        # 3차 백업: SetParent
+        body.SetParent(target_comp)
         return True
     except:
         try:
-            # 실패 시 최후의 수단 (매뉴얼 12번 지침 응용)
             new_shape = body.Shape.Copy()
             DesignBody.Create(target_comp.Template, "Cutter_Copy", new_shape)
             body.Delete()
@@ -126,7 +140,6 @@ def _safe_split_multi(targets, cutter_face):
     valid_targets = [t for t in targets if hasattr(t, "Shape") and t.Shape]
     if not valid_targets: return False
     try:
-        # [매뉴얼 2번 지침] 4인자 규칙
         SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None)
         return True
     except: return False
@@ -164,7 +177,6 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         radius = _get_dynamic_cutter_radius()
         circle_geom = Circle.Create(Frame.Create(origin, normal), radius)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
-        # [매뉴얼 4번 지침] Fill.Execute 사용
         Fill.Execute(Selection.Create(design_curve), None, FillOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
