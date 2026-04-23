@@ -34,30 +34,30 @@ class SCDMGenerator:
             
             if strat in ["OGRID", "CGRID", "RADIAL_OFFSET"]:
                 center = plan.get('center')
-                if not center: 
-                    print(f"   [WARN] No center for {strat} on {body}")
-                    continue
-                center_m = [c * scale for c in center]
-                axis = plan.get('axis', [0,0,1])
-                offset_m = plan.get('core_offset', 1.0) * scale
+                if not center: continue
                 
+                import json as pyjson
+                center_m = [float(c) * scale for c in center]
+                axis = [float(a) for a in plan.get('axis', [0,0,1])]
+                offset_m = float(plan.get('core_offset', 1.0)) * scale
+                
+                # [v4.84] 가독성을 위해 원본 바디 이름을 주석으로 추가
                 if strat == "OGRID":
-                    execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, center_m, axis, offset_m, i, body_idx)
+                    execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})  # Target: {6}\n".format(body_b64, pyjson.dumps(center_m), pyjson.dumps(axis), offset_m, i, body_idx, body)
                 elif strat == "CGRID":
-                    wall_dir = plan.get('wall_direction', [0,0,1])
-                    execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})\n".format(body_b64, center_m, axis, offset_m, wall_dir, i, body_idx)
+                    wall_dir = [float(w) for w in plan.get('wall_direction', [0,0,1])]
+                    execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})  # Target: {7}\n".format(body_b64, pyjson.dumps(center_m), pyjson.dumps(axis), offset_m, pyjson.dumps(wall_dir), i, body_idx, body)
                 elif strat == "RADIAL_OFFSET":
-                    r_m = plan.get('split_radius', 1.0) * scale
-                    execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, center_m, axis, r_m, i, body_idx)
+                    r_m = float(plan.get('split_radius', 1.0)) * scale
+                    execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})  # Target: {6}\n".format(body_b64, pyjson.dumps(center_m), pyjson.dumps(axis), r_m, i, body_idx, body)
             
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
+                import json as pyjson
                 split = plan.get("split_plane")
-                if not split: 
-                    print(f"   [WARN] No split_plane for {strat} on {body}")
-                    continue
-                origin_m = [o * scale for o in split['origin']]
-                normal = split.get('normal', [0,0,1])
-                execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})\n".format(body_b64, origin_m, normal, strat, i, body_idx)
+                if not split: continue
+                origin_m = [float(o) * scale for o in split['origin']]
+                normal = [float(n) for n in split.get('normal', [0,0,1])]
+                execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})  # Target: {6}\n".format(body_b64, pyjson.dumps(origin_m), pyjson.dumps(normal), strat, i, body_idx, body)
 
         template = """# -*- coding: utf-8 -*-
 # [v4.56] Standard Script Template
