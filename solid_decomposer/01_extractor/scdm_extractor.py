@@ -86,17 +86,23 @@ def extract_geometry():
     print("--- Starting Full Geometry Extraction ---")
     all_bodies_data = []
     
-    # 1. 대상 바디 수집 (성공했던 Fallback 로직 복구)
+    # 1. 대상 바디 수집 (재귀적 탐색으로 컴포넌트 내부 바디까지 수집)
+    def get_all_bodies_recursive(part, body_list):
+        for body in part.Bodies:
+            body_list.append(body)
+        for comp in part.Components:
+            if comp.Template:
+                get_all_bodies_recursive(comp.Template, body_list)
+
+    bodies = []
     try:
         root = GetRootPart()
-        bodies = root.GetAllBodies()
-    except:
-        try: bodies = GetRootPart().Bodies
-        except:
-            print("Error: Could not find any bodies.")
-            return []
+        get_all_bodies_recursive(root, bodies)
+    except Exception as e:
+        print("Error during body collection: " + str(e))
+        return []
             
-    print("Found {0} bodies.".format(bodies.Count))
+    print("Found {0} bodies in total (including components).".format(len(bodies)))
 
     # [추가] 중복 이름 감지
     name_count = {}

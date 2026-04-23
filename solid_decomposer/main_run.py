@@ -10,6 +10,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '03_generator'))
 from extract_manager import ExtractManager
 from strategy_planner import StrategyPlanner
 from scdm_generator import SCDMGenerator
+sys.path.append(os.path.join(os.path.dirname(__file__), 'scdm_bridge'))
+from guide_generator import GuideGenerator
 
 def run_pipeline(sub_device_name, input_json="geometry_data.json"):
     print(f"=== {sub_device_name} Solid Decomposition Pipeline Started ===")
@@ -61,8 +63,22 @@ def run_pipeline(sub_device_name, input_json="geometry_data.json"):
     # 직접 파일명을 전달하여 생성
     output_path = generator.generate_script(all_plans, output_name=output_filename)
     
-    print(f"\n[Success] Final script generated: {output_path}")
+    # 4. 분석 결과 리포트(MD) 생성
+    guide_text = f"# Decomposition Strategy Report: {sub_device_name}\n"
+    guide_text += "이 문서는 플래너가 수립한 각 바디별 상세 분할 계획을 담고 있습니다.\n\n"
     
+    for body in bodies_list:
+        b_name = body.get('body_name', 'Unknown')
+        # 이미 분석한 결과를 활용 (성능을 위해 캐싱하거나 재분석)
+        strategy, plans = planner.analyze_body(body)
+        guide_text += GuideGenerator.generate_markdown(b_name, strategy, plans)
+        guide_text += "\n\n"
+        
+    guide_path = os.path.join(script_dir, "Decomposition_Guide.md")
+    with open(guide_path, "w", encoding="utf-8") as f:
+        f.write(guide_text)
+    
+    print(f"[Success] Planning guide generated: {guide_path}")
     print(f"=== Pipeline Completed for {sub_device_name} ===")
 
 if __name__ == "__main__":
