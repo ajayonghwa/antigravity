@@ -27,15 +27,18 @@ class SCDMGenerator:
             body_idx = plan.get("body_index", 0)
             body = plan.get("body_name", "Unknown")
             body_b64 = base64.b64encode(body.encode('utf-8')).decode('ascii')
+            # [v4.49] Planner(mm) -> SCDM(Meter) 변환을 위해 수치들에 * 0.001 적용
+            center_m = [c * 0.001 for c in plan['center']]
             if strat == "OGRID":
-                execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, plan['center'], plan['axis'], plan['core_offset'], i, body_idx)
+                execution_calls += "apply_ogrid('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, center_m, plan['axis'], plan['core_offset']*0.001, i, body_idx)
             elif strat == "CGRID":
-                execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})\n".format(body_b64, plan['center'], plan['axis'], plan['core_offset'], plan.get('wall_direction', [0,0,1]), i, body_idx)
+                execution_calls += "apply_cgrid('{0}', {1}, {2}, {3}, {4}, {5}, {6})\n".format(body_b64, center_m, plan['axis'], plan['core_offset']*0.001, plan.get('wall_direction', [0,0,1]), i, body_idx)
             elif strat == "RADIAL_OFFSET":
-                execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, plan['center'], plan['axis'], plan['split_radius'], i, body_idx)
+                execution_calls += "apply_radial_offset('{0}', {1}, {2}, {3}, {4}, {5})\n".format(body_b64, center_m, plan['axis'], plan['split_radius']*0.001, i, body_idx)
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan["split_plane"]
-                execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})\n".format(body_b64, split['origin'], split['normal'], strat, i, body_idx)
+                origin_m = [o * 0.001 for o in split['origin']]
+                execution_calls += "apply_split_plane('{0}', {1}, {2}, '{3}', {4}, {5})\n".format(body_b64, origin_m, split['normal'], strat, i, body_idx)
 
         template = """# -*- coding: utf-8 -*-
 import math
@@ -43,13 +46,12 @@ import base64
 import re
 import clr
 
-# [v4.48] 절대 경로 임포트 및 별칭 지정 (이름 충돌 방지)
+# [v4.49] 단위 변환 정합성 확보 (Planner mm -> SCDM Meter)
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     import SpaceClaim.Api.V22 as SCDM
     import SpaceClaim.Api.V22.Modeler as Modeler
     import SpaceClaim.Api.V22.Geometry as Geometry
-    import SpaceClaim.Api.V22.Scripting as Scripting
     import SpaceClaim.Api.V22.Commands as Commands
 except: pass
 
@@ -68,7 +70,8 @@ def get_matching_bodies(body_b64):
     try: target_name = base64.b64decode(body_b64).decode('utf-8')
     except: target_name = body_b64
     all_bodies = []
-    get_all_bodies_recursive(SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document), all_bodies)
+    root = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document)
+    get_all_bodies_recursive(root, all_bodies)
     matched = []
     pattern = re.compile(re.escape(target_name) + r"(_|\\s|\\(|\\d|$)")
     for b in all_bodies:
@@ -112,11 +115,12 @@ def _move_body_to_comp(body, body_idx):
             except: return False
 
 def _get_dynamic_cutter_radius():
+    # [v4.49] Meter 단위에서의 동적 반경 계산
     try:
         r = SCDM.PartExtensions.GetRootPart(SCDM.Window.ActiveWindow.Document).Range
         diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
-        return diag * 2.0
-    except: return 100.0
+        return diag * 3.0 # 안전계수 상향
+    except: return 1.0 # 기본 1m
 
 def _safe_split_multi(targets, cutter_face):
     if not targets: return False
@@ -139,8 +143,9 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[SCDM.IDesignBody]())
         circle = Geometry.Circle.Create(Geometry.Frame.Create(origin_pt, direction), offset)
         design_curve = SCDM.DesignCurve.Create(root, Geometry.CurveSegment.Create(circle))
-        try: Commands.ExtrudeEdges.ByDistance(SCDM.Selection.Create(design_curve), 20.0, Modeler.ExtrudeEdgeOptions(), None)
-        except: Commands.ExtrudeEdges.Execute(SCDM.Selection.Create(design_curve), 20.0, Modeler.ExtrudeEdgeOptions(), None)
+        # [v4.49] Extrude 길이는 20cm 정도로 설정
+        try: Commands.ExtrudeEdges.ByDistance(SCDM.Selection.Create(design_curve), 0.2, Modeler.ExtrudeEdgeOptions(), None)
+        except: Commands.ExtrudeEdges.Execute(SCDM.Selection.Create(design_curve), 0.2, Modeler.ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[SCDM.IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
