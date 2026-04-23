@@ -21,22 +21,16 @@ class SCDMGenerator:
             if strat == "OGRID":
                 call = f"apply_ogrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
                 execution_calls += call
-                print(f"   -> Added O-GRID split for {body}")
             elif strat == "CGRID":
                 call = f"apply_cgrid('{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i})\n"
                 execution_calls += call
-                print(f"   -> Added C-GRID split for {body}")
             elif strat == "RADIAL_OFFSET":
                 call = f"apply_radial_offset('{body}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i})\n"
                 execution_calls += call
-                print(f"   -> Added RADIAL_OFFSET split for {body}")
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan["split_plane"]
                 call = f"apply_split_plane('{body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
                 execution_calls += call
-                print(f"   -> Added {strat} split for {body}")
-            else:
-                print(f"   !! Warning: Unknown strategy '{strat}' skipped.")
 
         script_template = f"""
 # -*- coding: utf-8 -*-
@@ -44,27 +38,25 @@ import clr
 import System
 import math
 
-# 스페이스클레임 API 로드
+# [1] API 로드 및 참조
 def initialize_api():
-    for v in range(22, 16, -1):
-        try:
-            ref = "SpaceClaim.Api.V" + str(v)
-            clr.AddReference(ref)
-            exec("from SpaceClaim.Api.V" + str(v) + " import *")
-            exec("from SpaceClaim.Api.V" + str(v) + ".Modeler import *")
-            exec("from SpaceClaim.Api.V" + str(v) + ".Commands import *")
-            return True
-        except: pass
-    return False
+    try:
+        clr.AddReference("SpaceClaim.Api.V22")
+        from SpaceClaim.Api.V22 import *
+        from SpaceClaim.Api.V22.Modeler import *
+        from SpaceClaim.Api.V22.Commands import *
+        return True
+    except:
+        return False
 
 initialize_api()
 
-# 전역 커터 목록 초기화
+# 전역 커터 목록
 if 'ALL_CUTTERS' not in globals():
     ALL_CUTTERS = []
 
 def get_all_bodies_recursive(part, body_list):
-    '''모든 컴포넌트를 뒤져서 바디를 수집'''
+    '''모든 컴포넌트를 탐색하여 바디 수집'''
     for body in part.Bodies:
         body_list.append(body)
     for comp in part.Components:
@@ -72,147 +64,140 @@ def get_all_bodies_recursive(part, body_list):
             get_all_bodies_recursive(comp.Template, body_list)
 
 def make_all_bodies_independent():
-    '''패턴/인스턴스로 공유된 바디를 모두 독립화'''
     try:
         root = GetRootPart()
         all_bodies = []
         get_all_bodies_recursive(root, all_bodies)
         for body in all_bodies:
             try:
-                # 바디 복사 후 원본 삭제 방식의 독립화
                 shape_copy = body.Shape.Copy()
                 new_body = DesignBody.Create(root, body.Name + "_indep", shape_copy)
                 body.Delete()
             except: pass
-    except Exception as e:
-        print("Pattern independence failed: " + str(e))
+    except: pass
 
-def get_matching_bodies(target_base):
-    '''이름 기반 3단계 매칭'''
+def get_matching_bodies(target_name):
+    '''이름이 정확히 일치하는 바디 탐색'''
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
-    matched = []
-    for body in all_bodies:
-        b_name = body.Name
-        if b_name == target_base or b_name.startswith(target_base + " "):
-            matched.append(body)
+    matched = [b for b in all_bodies if b.Name == target_name]
     return matched
 
 def _create_cylindrical_cutter(origin_pt, direction, radius):
-    '''동적 스케일링이 적용된 원통형 커터 생성'''
+    '''원통형 커터 생성 (V22 최적화)'''
     try:
-        bbox = GetRootPart().Range
+        root = GetRootPart()
+        bbox = root.Range
         diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
         extrude_dist = max(diag * 1.5, 0.1)
-    except:
-        extrude_dist = 5.0
         
-    shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
-                                  origin_pt.Y - direction.Y * extrude_dist/2, 
-                                  origin_pt.Z - direction.Z * extrude_dist/2)
-    
-    frame = Frame.Create(shifted_origin, direction)
-    circle = Circle.Create(frame, radius)
-    design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle))
-    
-    tool_body = None
-    try:
-        bodies_before = list(GetRootPart().GetAllBodies())
+        shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
+                                      origin_pt.Y - direction.Y * extrude_dist/2, 
+                                      origin_pt.Z - direction.Z * extrude_dist/2)
+        
+        frame = Frame.Create(shifted_origin, direction)
+        circle = Circle.Create(frame, radius)
+        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
+        
+        bodies_before = []
+        get_all_bodies_recursive(root, bodies_before)
+        
         sel = Selection.Create(design_curve)
         try: ExtrudeEdges.Execute(sel, extrude_dist, ExtrudeEdgeOptions(), None)
         except: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
         
-        bodies_after = list(GetRootPart().GetAllBodies())
+        bodies_after = []
+        get_all_bodies_recursive(root, bodies_after)
+        
         new_bodies = [b for b in bodies_after if b not in bodies_before]
-        if new_bodies: tool_body = new_bodies[0]
-    except: pass
-    
-    design_curve.Delete()
-    return tool_body
+        design_curve.Delete()
+        
+        return new_bodies[0] if new_bodies else None
+    except Exception as e:
+        print("Cutter Creation Error: " + str(e))
+        return None
 
-def apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx):
+def apply_ogrid(target_name, center, axis, offset, idx):
     global ALL_CUTTERS
-    origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
-    direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
+    print(" -> Step {{0}}: O-GRID splitting for {{1}}".format(idx, target_name))
     
-    targets = get_matching_bodies(target_full_name)
-    for i, target_body in enumerate(targets):
-        tool_body = _create_cylindrical_cutter(origin_pt, direction, core_offset)
-        if tool_body:
-            tool_body.Name = "Cutter_OGrid_" + str(idx) + "_" + str(i)
-            ALL_CUTTERS.append(tool_body)
-            try: SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
-            except: pass
-
-def apply_radial_offset(target_full_name, center_list, axis_list, split_radius, idx):
-    global ALL_CUTTERS
-    origin_pt = Point.Create(center_list[0], center_list[1], center_list[2])
-    direction = Direction.Create(axis_list[0], axis_list[1], axis_list[2])
+    origin_pt = Point.Create(center[0], center[1], center[2])
+    direction = Direction.Create(axis[0], axis[1], axis[2])
     
-    targets = get_matching_bodies(target_full_name)
-    for i, target_body in enumerate(targets):
-        tool_body = _create_cylindrical_cutter(origin_pt, direction, split_radius)
-        if tool_body:
-            tool_body.Name = "Cutter_Radial_" + str(idx) + "_" + str(i)
-            ALL_CUTTERS.append(tool_body)
-            try: SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(tool_body.Faces[0]), True, None)
-            except: pass
+    targets = get_matching_bodies(target_name)
+    if not targets:
+        print("    !! Body not found: {{0}}".format(target_name))
+        return
 
-def apply_cgrid(target_full_name, center_list, axis_list, core_offset, wall_dir, idx):
-    apply_ogrid(target_full_name, center_list, axis_list, core_offset, idx)
+    for i, target in enumerate(targets):
+        tool = _create_cylindrical_cutter(origin_pt, direction, offset)
+        if tool:
+            tool.Name = "Cutter_OGrid_" + str(idx)
+            ALL_CUTTERS.append(tool)
+            try:
+                SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+                print("    [OK] Split successful.")
+            except Exception as e:
+                print("    [FAIL] Split failed: " + str(e))
 
-def apply_split_plane(target_full_name, origin_list, normal_list, strategy, idx):
+def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
+    print(" -> Step {{0}}: {{1}} splitting for {{2}}".format(idx, strategy, target_name))
+    
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     frame = Frame.Create(origin, normal)
+    root = GetRootPart()
     
     try:
-        bbox = GetRootPart().Range
-        diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
-        huge_radius = max(diag * 1.5, 0.1)
-            
-        circle_geom = Circle.Create(frame, huge_radius)
-        design_curve = DesignCurve.Create(GetRootPart(), CurveSegment.Create(circle_geom))
+        bbox = root.Range
+        huge_radius = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2) * 1.5
         
-        bodies_before = list(GetRootPart().GetAllBodies())
-        try: Fill.Execute(Selection.Create(design_curve), None)
-        except: Fill.Execute(Selection.Create(design_curve))
-            
-        bodies_after = list(GetRootPart().GetAllBodies())
+        circle_geom = Circle.Create(frame, huge_radius)
+        design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
+        
+        bodies_before = []
+        get_all_bodies_recursive(root, bodies_before)
+        
+        Fill.Execute(Selection.Create(design_curve))
+        
+        bodies_after = []
+        get_all_bodies_recursive(root, bodies_after)
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         
         if new_bodies:
-            tool_body = new_bodies[0]
-            tool_body.Name = "Cutter_Surface_" + strategy + "_" + str(idx)
-            ALL_CUTTERS.append(tool_body)
-            
-            targets = get_matching_bodies(target_full_name)
+            tool = new_bodies[0]
+            tool.Name = "Cutter_Plane_" + str(idx)
+            ALL_CUTTERS.append(tool)
+            targets = get_matching_bodies(target_name)
             for target in targets:
-                try: SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool_body.Faces[0]), True, None)
-                except: pass
+                try: 
+                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+                    print("    [OK] Split successful.")
+                except Exception as e:
+                    print("    [FAIL] Split failed: " + str(e))
         
         design_curve.Delete()
     except Exception as e:
-        print(strategy + " split error: " + str(e))
+        print("    [ERROR] Plane split error: " + str(e))
 
 def finalize():
     global ALL_CUTTERS
-    if ALL_CUTTERS:
-        try:
-            for cutter in ALL_CUTTERS:
-                try: cutter.Delete()
-                except: pass
-            PartSharedTopology.Share(GetRootPart(), None)
+    print(" -> Finalizing: Cleaning cutters and sharing topology...")
+    for cutter in ALL_CUTTERS:
+        try: cutter.Delete()
         except: pass
+    try:
+        from SpaceClaim.Api.V22.Commands import PartSharedTopology
+        PartSharedTopology.Share(GetRootPart(), None)
+    except: pass
+    print(" --- Decomposition Workflow Finished ---")
 
-# --- Execution ---
-# make_all_bodies_independent() # 필요 시 활성화
+# --- EXECUTION ---
 {execution_calls}
 finalize()
 """
         output_path = os.path.join(self.output_dir, output_name)
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(output_path, "w") as f:
             f.write(script_template)
-        
         return output_path
