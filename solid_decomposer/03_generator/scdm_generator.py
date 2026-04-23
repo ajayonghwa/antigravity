@@ -14,15 +14,20 @@ class SCDMGenerator:
         for i, plan in enumerate(plan_list):
             strat = plan.get("strategy", "").upper()
             body = plan.get("body_name", "Unknown")
+            
+            # [v4.16] IronPython 2.7에서 한글 문자열 비교를 위해 반드시 u"..." 접두사를 사용해야 함
+            # r"..." 을 사용하면 바이트 스트링(utf-8 byte array)으로 해석되어 .NET String과 일치하지 않음
+            safe_body = body.replace("'", "\\'") # 작은따옴표 이스케이프
+            
             if strat == "OGRID":
-                execution_calls += f"apply_ogrid(r'{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
+                execution_calls += f"apply_ogrid(u'{safe_body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {i})\n"
             elif strat == "CGRID":
-                execution_calls += f"apply_cgrid(r'{body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i})\n"
+                execution_calls += f"apply_cgrid(u'{safe_body}', {plan['center']}, {plan['axis']}, {plan['core_offset']}, {plan.get('wall_direction', [0,0,1])}, {i})\n"
             elif strat == "RADIAL_OFFSET":
-                execution_calls += f"apply_radial_offset(r'{body}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i})\n"
+                execution_calls += f"apply_radial_offset(u'{safe_body}', {plan['center']}, {plan['axis']}, {plan['split_radius']}, {i})\n"
             elif strat in ["AXIAL", "SECTOR", "HGRID", "YBLOCK_CUT"]:
                 split = plan["split_plane"]
-                execution_calls += f"apply_split_plane(r'{body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
+                execution_calls += f"apply_split_plane(u'{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
         script_template = f"""# -*- coding: utf-8 -*-
 import clr
@@ -61,11 +66,10 @@ def get_all_bodies_recursive(part, body_list):
 def get_matching_bodies(target_name):
     all_bodies = []
     get_all_bodies_recursive(GetRootPart(), all_bodies)
-    # [v4.15] 인코딩 문제를 우회하기 위해 startswith나 포함 관계로도 찾을 수 있도록 유연성 부여
     matched = []
     for b in all_bodies:
-        # 정확한 일치 또는 접미사가 붙은 형태(_1, _2 등)
-        if b.Name == target_name or b.Name.startswith(target_name + "_"):
+        # target_name은 이제 unicode 객체이므로 .NET String인 b.Name과 완벽히 일치함
+        if b.Name == target_name or b.Name.startswith(target_name + u"_"):
             matched.append(b)
     return matched
 
@@ -77,7 +81,7 @@ def _get_safe_range(obj):
 def _get_target_cutter_comp(target_body_name):
     root = GetRootPart()
     # 컴포넌트 이름에 특수문자나 한글이 들어가면 문제가 생길 수 있으므로 안전한 이름 사용
-    safe_name = "".join(c for c in target_body_name if c.isalnum() or c == "_")
+    safe_name = "".join(c for c in target_body_name if c.isalnum() or c == u"_")
     comp_name = "CUTTERS_FOR_" + safe_name
     for comp in root.Components:
         if comp.Name == comp_name: return comp
@@ -133,10 +137,16 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
 
 def apply_ogrid(target_name, center, axis, offset, idx):
     global ALL_CUTTERS
-    print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name.encode('utf-8').decode('utf-8', 'ignore')))
+    # [v4.16] 복잡한 인코딩 해킹 제거, 그냥 유니코드로 출력 (IronPython이 알아서 처리)
+    try:
+        print(" -> Step {{0}}: O-GRID for {{1}}".format(idx, target_name))
+    except:
+        print(" -> Step {{0}}: O-GRID".format(idx))
+        
     targets = get_matching_bodies(target_name)
     if not targets:
-        print("    [ERROR] Could not find target body: " + target_name.encode('utf-8').decode('utf-8', 'ignore'))
+        try: print("    [ERROR] Could not find target body: " + target_name)
+        except: print("    [ERROR] Could not find target body")
         return
 
     origin_pt = SC_Point.Create(center[0], center[1], center[2])
@@ -157,14 +167,18 @@ def apply_ogrid(target_name, center, axis, offset, idx):
             if _safe_split(target, cutter_face):
                 print("    [OK] Split Success")
             else:
-                print("    [FAIL] Split failed for " + target.Name.encode('utf-8').decode('utf-8', 'ignore'))
+                try: print("    [FAIL] Split failed for " + target.Name)
+                except: print("    [FAIL] Split failed")
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
-    print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name.encode('utf-8').decode('utf-8', 'ignore')))
+    try: print(" -> Step {{0}}: {{1}} for {{2}}".format(idx, strategy, target_name))
+    except: print(" -> Step {{0}}: {{1}}".format(idx, strategy))
+    
     targets = get_matching_bodies(target_name)
     if not targets:
-        print("    [ERROR] Could not find target body: " + target_name.encode('utf-8').decode('utf-8', 'ignore'))
+        try: print("    [ERROR] Could not find target body: " + target_name)
+        except: print("    [ERROR] Could not find target body")
         return
     
     origin = SC_Point.Create(origin_list[0], origin_list[1], origin_list[2])
@@ -214,7 +228,6 @@ def finalize():
 finalize()
 """
         output_path = os.path.join(self.output_dir, output_name)
-        # [v4.15] 파일 작성 시 utf-8 인코딩을 명시하여 한글 깨짐 방지
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(script_template)
         return output_path
