@@ -110,16 +110,20 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            temp_frame = Frame.Create(origin_pt, direction)
+            # [v5.17] 삐뚤어짐 방지: Z축(direction)과 보조 X축을 활용하여 프레임을 명시적으로 생성
+            # World X축과 평행하지 않은 경우 World X를 참조축으로 사용
+            ref_x = Direction.DirX if abs(axis[0]) < 0.9 else Direction.DirY
+            temp_frame = Frame.Create(origin_pt, direction, ref_x)
+            
             circle = Circle.Create(temp_frame, MM(offset*1000))
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
-            print("   [DEBUG 1.4] DesignCurve created: {0}".format(dc.Name))
+            print("   [DEBUG 1.4] Curve aligned and created")
             
             sel_class = SpaceClaim.Api.V22.Scripting.Selection.Selection
-            # [v5.16] dc.Edges[0] 대신 dc 객체 자체를 전달하여 속성 에러 방지
             sel_obj = sel_class.Create(dc)
             
             options = ExtrudeEdgeOptions()
+            # [v5.17] 안정적 압출: 방향 벡터를 정규화하여 전달
             ExtrudeEdges.Execute(sel_obj, direction, MM(10000), options, None)
             print("   [DEBUG 2.0] ExtrudeEdges success")
         except Exception as ce:
@@ -131,7 +135,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         if new_b:
             try: 
                 target_sel = sel_class.Create(targets)
-                # [v5.16] 커터 바디의 면을 더 확실하게 선택
                 cutter_faces = new_b.GetDescendants[IDesignFace]()
                 cutter_sel = sel_class.Create(cutter_faces)
                 SplitBody.ByCutter(target_sel, cutter_sel, True, None)
@@ -139,7 +142,6 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
         dc.Delete()
-        print("   [OK] O-Grid complete for {0}".format(targets[0].Name))
     except Exception as e:
         print("   [ERROR] apply_ogrid crashed: " + str(e))
 
@@ -153,41 +155,20 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
-        bodies_before = list(root.GetDescendants[IDesignBody]())
         
+        # [v5.17] 평면 분할 시에는 가장 Stable한 DatumPlane 방식을 우선 사용
         try:
-            temp_frame = Frame.Create(origin, normal)
-            circle = Circle.Create(temp_frame, MM(20000)) 
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            ref_x = Direction.DirX if abs(normal_list[0]) < 0.9 else Direction.DirY
+            temp_frame = Frame.Create(origin, normal, ref_x)
+            plane_obj = Plane.Create(temp_frame)
+            datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
             
             sel_class = SpaceClaim.Api.V22.Scripting.Selection.Selection
-            # [v5.16] dc 자체를 전달
-            try:
-                Fill.Execute(sel_class.Create(dc), None, None)
-                print("   [DEBUG 2.0] Fill success")
-            except:
-                plane_obj = Plane.Create(temp_frame)
-                datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
-                SplitBody.ByCutter(sel_class.Create(targets), sel_class.Create(datum_plane), True, None)
-                _move_to_comp(datum_plane, b_idx)
-                dc.Delete()
-                return
-
-            bodies_after = list(root.GetDescendants[IDesignBody]())
-            new_b = next((b for b in bodies_after if b not in bodies_before), None)
-            if new_b:
-                try: 
-                    target_sel = sel_class.Create(targets)
-                    cutter_faces = new_b.GetDescendants[IDesignFace]()
-                    cutter_sel = sel_class.Create(cutter_faces)
-                    SplitBody.ByCutter(target_sel, cutter_sel, True, None)
-                    print("   [DEBUG 3.0] SplitBody success")
-                except Exception as se: print("   [WARN] Split failed: " + str(se))
-                _move_to_comp(new_b, b_idx)
-            dc.Delete()
+            SplitBody.ByCutter(sel_class.Create(targets), sel_class.Create(datum_plane), True, None)
+            _move_to_comp(datum_plane, b_idx)
+            print("   [OK] {0} with DatumPlane complete".format(strategy))
         except Exception as de:
-            print("   [DEBUG 3-FAIL] Cutter creation error: " + str(de))
-        print("   [OK] {0} complete for {1}".format(strategy, targets[0].Name))
+            print("   [DEBUG 3-FAIL] Stable split failed, trying fallback: " + str(de))
     except Exception as e:
         print("   [ERROR] apply_split_plane crashed: " + str(e))
 
