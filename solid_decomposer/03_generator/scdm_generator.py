@@ -41,8 +41,7 @@ def initialize_api():
 
 initialize_api()
 
-if 'ALL_CUTTERS' not in globals(): ALL_CUTTERS = []
-CUTTER_COMP = None
+ALL_CUTTERS = []
 
 def get_all_bodies_recursive(part, body_list):
     for body in part.Bodies: body_list.append(body)
@@ -59,18 +58,15 @@ def _get_safe_range(obj):
         if hasattr(obj, attr): return getattr(obj, attr)
     return None
 
-def _get_cutter_comp():
-    global CUTTER_COMP
-    if CUTTER_COMP: return CUTTER_COMP
+def _get_target_cutter_comp(target_body_name):
+    '''타겟 바디별 전용 커터 컴포넌트 생성'''
     root = GetRootPart()
+    comp_name = "CUTTERS_FOR_" + target_body_name
     for comp in root.Components:
-        if comp.Name == "AUTO_CUTTERS":
-            CUTTER_COMP = comp
-            return CUTTER_COMP
-    CUTTER_COMP = Component.Create(root, "AUTO_CUTTERS")
-    return CUTTER_COMP
+        if comp.Name == comp_name: return comp
+    return Component.Create(root, comp_name)
 
-def _create_cylindrical_cutter(target_body, origin_pt, direction, radius):
+def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
     try:
         root = GetRootPart()
         bbox = _get_safe_range(target_body)
@@ -101,7 +97,8 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius):
         
         if new_bodies:
             tool = new_bodies[0]
-            tool.SetParent(_get_cutter_comp())
+            tool.Name = name
+            tool.SetParent(_get_target_cutter_comp(target_body.Name))
             return tool
         return None
     except: return None
@@ -116,10 +113,10 @@ def apply_ogrid(target_name, center, axis, offset, idx):
     direction = Direction.Create(axis[0], axis[1], axis[2])
 
     for i, target in enumerate(targets):
-        tool = _create_cylindrical_cutter(target, origin_pt, direction, offset)
+        cutter_name = "Cutter_OGrid_Hole_{{0}}_{{1}}".format(idx, i)
+        tool = _create_cylindrical_cutter(target, origin_pt, direction, offset, cutter_name)
         if tool:
             ALL_CUTTERS.append(tool)
-            # [v4.5] 원통형 면을 명시적으로 찾아 커터로 사용
             cutter_face = None
             for face in tool.Faces:
                 if "Cylinder" in face.Shape.Geometry.GetType().Name:
@@ -130,8 +127,7 @@ def apply_ogrid(target_name, center, axis, offset, idx):
             try:
                 SplitBody.ByCutter(Selection.Create(target), Selection.Create(cutter_face), True, None)
                 print("    [OK] Split Success")
-            except Exception as e:
-                print("    [SKIP] Split failed: " + str(e))
+            except: pass
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
@@ -144,7 +140,7 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     frame = Frame.Create(origin, normal)
     root = GetRootPart()
 
-    for target in targets:
+    for i, target in enumerate(targets):
         try:
             bbox = _get_safe_range(target)
             huge_radius = 5.0
@@ -164,18 +160,18 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
             
             if new_bodies:
                 tool = new_bodies[0]
-                tool.SetParent(_get_cutter_comp())
+                tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
+                tool.SetParent(_get_target_cutter_comp(target.Name))
                 ALL_CUTTERS.append(tool)
-                # 서피스의 경우 첫 번째 면이 곧 자를 평면임
                 try: 
                     SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
                     print("    [OK] Split Success")
-                except: print("    [SKIP] Split failed")
+                except: pass
             design_curve.Delete()
         except: pass
 
 def finalize():
-    print(" --- Finished ---")
+    print(" --- Finished. Cutters preserved in specialized components. ---")
     try:
         from SpaceClaim.Api.V22.Commands import PartSharedTopology
         PartSharedTopology.Share(GetRootPart(), None)

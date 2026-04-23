@@ -2,7 +2,6 @@
 import json
 import os
 import clr
-import math
 
 def load_scdm_api():
     try:
@@ -16,7 +15,17 @@ scapi = load_scdm_api()
 if 'OUTPUT_PATH' not in globals():
     OUTPUT_PATH = r"D:\yhheo\py_programs_by_yh\solid_decomposer\data\geometry_data.json"
 
-def get_face_data(face):
+def get_world_transform(occurrence):
+    '''컴포넌트 계층을 따라가며 월드 변환 매트릭스 계산'''
+    matrix = scapi.Matrix.Identity
+    curr = occurrence
+    while curr:
+        if hasattr(curr, "Transform"):
+            matrix = curr.Transform.Matrix * matrix
+        curr = curr.Parent
+    return matrix
+
+def get_face_data(face, transform):
     data = {
         "id": 0, "type": "Unknown", "area": 0.0, 
         "box": {"min": [0,0,0], "max": [0,0,0]},
@@ -25,9 +34,8 @@ def get_face_data(face):
     try:
         if hasattr(face, "Id"): data["id"] = face.Id
         shape = face.Shape if hasattr(face, "Shape") else face
-        data["area"] = shape.Area if hasattr(shape, "Area") else 0.0
         
-        # [v4.6] 1순위: 기본 지오메트리 정보 (절대 누락 금지)
+        # [v4.8] 로컬 지오메트리 정보 추출
         if hasattr(shape, "Geometry"):
             geom = shape.Geometry
             g_type = geom.GetType().Name
@@ -35,40 +43,38 @@ def get_face_data(face):
             
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
-                if hasattr(geom, "Frame"):
-                    f = geom.Frame
-                    data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
-                    data["axis"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
+                f = geom.Frame
+                # 로컬 좌표
+                l_origin = f.Origin
+                l_axis = f.DirZ
+                # 월드 좌표로 변환
+                w_origin = transform * l_origin
+                w_axis = transform * l_axis
+                data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
+                data["axis"] = [w_axis.X, w_axis.Y, w_axis.Z]
                 
-                # 내경 판별
                 if hasattr(shape, "Orientation"):
                     if str(shape.Orientation) == "Reversed": data["is_internal"] = True
             
             elif "Plane" in g_type:
-                if hasattr(geom, "Frame"):
-                    f = geom.Frame
-                    data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
-                    data["normal"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
+                f = geom.Frame
+                w_origin = transform * f.Origin
+                w_normal = transform * f.DirZ
+                data["origin"] = [w_origin.X, w_origin.Y, w_origin.Z]
+                data["normal"] = [w_normal.X, w_normal.Y, w_normal.Z]
 
-        # [v4.6] 2순위: 정밀 평가 엔진 시도 (보정용)
-        try:
-            eval = face.GetEvaluation()
-            pos = eval.Evaluate(eval.ParamRange.Mid)
-            # 기본 원점이 0,0,0인 경우에만 평가값으로 보정
-            if data["origin"] == [0,0,0]:
-                data["origin"] = [pos.Point.X, pos.Point.Y, pos.Point.Z]
-        except: pass
-
-        # Bounding Box
+        # Bounding Box (변환 적용)
         r = getattr(shape, "Range", getattr(face, "Box", None))
         if r:
-            data["box"]["min"] = [r.Min.X, r.Min.Y, r.Min.Z]
-            data["box"]["max"] = [r.Max.X, r.Max.Y, r.Max.Z]
+            p1 = transform * r.Min
+            p2 = transform * r.Max
+            data["box"]["min"] = [min(p1.X, p2.X), min(p1.Y, p2.Y), min(p1.Z, p2.Z)]
+            data["box"]["max"] = [max(p1.X, p2.X), max(p1.Y, p2.Y), max(p1.Z, p2.Z)]
     except: pass
     return data
 
 def extract_geometry():
-    print("--- SCDM Robust Extraction Engine (v4.6) ---")
+    print("--- SCDM World-Transform Extraction (v4.8) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
@@ -76,18 +82,23 @@ def extract_geometry():
     unit_str = "m"
     try: unit_str = str(root.Document.Units.Length.Symbol)
     except: pass
-    print(" - Units: {0}".format(unit_str))
 
-    def collect(part, blist):
-        for b in part.Bodies: blist.append(b)
+    def collect_with_transform(part, current_transform, blist):
+        # 바디 수집
+        for b in part.Bodies:
+            blist.append((b, current_transform))
+        # 하위 컴포넌트 재귀 탐색
         for c in part.Components:
-            if c.Template: collect(c.Template, blist)
+            if c.Template:
+                # 계층적 변환 매트릭스 누적
+                new_transform = current_transform * c.Transform
+                collect_with_transform(c.Template, new_transform, blist)
     
-    bodies = []
-    collect(root, bodies)
-    print(" - Found {0} bodies".format(len(bodies)))
+    bodies_info = []
+    collect_with_transform(root, scapi.Matrix.Identity, bodies_info)
+    print(" - Found {0} bodies in hierarchy".format(len(bodies_info)))
 
-    for i, body in enumerate(bodies):
+    for i, (body, transform) in enumerate(bodies_info):
         try:
             bname = body.Name
             uname = "AUTO_BODY_" + str(i)
@@ -101,18 +112,16 @@ def extract_geometry():
 
             face_list = list(body.Faces)
             fmap = {}
-            cyl_count = 0
             for j, face in enumerate(face_list):
-                fdata = get_face_data(face)
+                fdata = get_face_data(face, transform)
                 fdata["index"] = j
                 body_data["faces"].append(fdata)
                 fmap[face] = j
-                if "Cylinder" in fdata["type"]: cyl_count += 1
             
             all_bodies_data.append(body_data)
-            print(" - [OK] {0}: {1} faces (Cylinders: {2})".format(uname, len(face_list), cyl_count))
+            print(" - [OK] {0} (Transformed to World)".format(uname))
         except Exception as e:
-            print(" - [ERROR] Failed to process {0}: {1}".format(body.Name, str(e)))
+            print(" - [ERROR] {0}: {1}".format(body.Name, str(e)))
             
     return all_bodies_data, [], unit_str
 
@@ -120,5 +129,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": uinfo, "warnings": warns, "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Geometry data saved successfully.")
+    print("\n[FINISH] World-coordinate data saved.")
 except Exception as e: print("\n[FATAL] " + str(e))
