@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 import json
+import traceback
 
 # 1~3단계 모듈 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), '01_extractor'))
@@ -10,85 +12,83 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '03_generator'))
 from extract_manager import ExtractManager
 from strategy_planner import StrategyPlanner
 from scdm_generator import SCDMGenerator
-sys.path.append(os.path.join(os.path.dirname(__file__), 'scdm_bridge'))
-from guide_generator import GuideGenerator
 
 def run_pipeline(sub_device_name, input_json="geometry_data.json"):
-    print(f"=== {sub_device_name} Solid Decomposition Pipeline Started ===")
+    print(f"=== {sub_device_name} Solid Decomposition Pipeline Started (v4.53) ===")
     
     project_root = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(project_root, "data")
     script_dir = os.path.join(project_root, "04_scripts")
     
-    # 1. 추출된 데이터 로드 (01_extractor)
-    # 입력된 경로에서 파일명만 추출 (예: data/test.json -> test.json)
-    input_filename = os.path.basename(input_json)
-    manager = ExtractManager(project_root)
-    data = manager.load_geometry_data(input_filename)
-    
-    if not data:
-        print(f"Error: No data found for {input_json}. Please run scdm_extractor.py in SpaceClaim first.")
-        return
-
-    # 2. 분할 전략 수립 (02_planner)
-    planner = StrategyPlanner(sub_device_name=sub_device_name)
-    all_plans = []
-    
-    # [수정] 데이터 구조가 딕셔너리이므로 "bodies" 키로 접근합니다.
-    bodies_list = data.get("bodies", data) # 만약 예전 방식(리스트)이라면 그대로 사용
-    if isinstance(data, dict) and "bodies" in data:
-        bodies_list = data["bodies"]
-
-    # [수정] 데이터 구조에서 단위(units) 정보를 가져옵니다.
-    current_units = data.get("units", "m")
-    print(f" - Model Units: {current_units}")
-
-    for body in bodies_list:
-        print(f"\n[Analyzing Body: {body.get('body_name', 'Unknown')}]")
-        strategy, plans = planner.analyze_body(body, units=current_units)
+    try:
+        # 1. 추출된 데이터 로드
+        input_filename = os.path.basename(input_json)
+        manager = ExtractManager(project_root)
+        data = manager.load_geometry_data(input_filename)
         
-        if plans:
-            print(f" - Strategy: {strategy} ({len(plans)} plans)")
-            all_plans.extend(plans)
-        else:
-            # advice = planner.get_ai_advice(body) # 이 함수가 없을 경우 대비
-            print(f" - No automatic plans generated for this body.")
+        if not data:
+            print(f"[ERROR] No data found for {input_json}. Please run Step 1 in SpaceClaim first.")
+            return
 
-    # 3. SCDM 실행 스크립트 생성 (03_generator)
-    generator = SCDMGenerator(project_root)
-    
-    # [수정] 원클릭 마스터 스크립트와 이름을 맞추기 위해 고정된 파일명을 사용합니다.
-    output_filename = "scdm_decomposition_script.py"
-    
-    # 04_scripts 폴더 생성 확인
-    if not os.path.exists(script_dir):
-        os.makedirs(script_dir)
+        # 2. 분할 전략 수립
+        planner = StrategyPlanner(sub_device_name=sub_device_name)
+        all_plans = []
         
-    # 직접 파일명을 전달하여 생성
-    output_path = generator.generate_script(all_plans, output_name=output_filename)
-    
-    # 4. 분석 결과 리포트(MD) 생성
-    guide_text = f"# Decomposition Strategy Report: {sub_device_name}\n"
-    guide_text += f"- **Model Units**: {current_units}\n"
-    guide_text += "이 문서는 플래너가 수립한 각 바디별 상세 분할 계획을 담고 있습니다.\n\n"
-    
-    for body in bodies_list:
-        b_name = body.get('body_name', 'Unknown')
-        # 이미 분석한 결과를 활용 (성능을 위해 캐싱하거나 재분석)
-        strategy, plans = planner.analyze_body(body)
-        guide_text += GuideGenerator.generate_markdown(b_name, strategy, plans)
-        guide_text += "\n\n"
+        bodies_list = data.get("bodies", [])
+        current_units = data.get("units", "m")
+        print(f" - Model Units: {current_units} | Found {len(bodies_list)} bodies")
+
+        for body in bodies_list:
+            b_name = body.get('body_name', 'Unknown')
+            print(f"\n[Analyzing Body: {b_name}]")
+            try:
+                strategy, plans = planner.analyze_body(body, units=current_units)
+                if plans:
+                    print(f"   [OK] Strategy: {strategy} ({len(plans)} plans)")
+                    all_plans.extend(plans)
+                else:
+                    print(f"   [SKIP] No automatic plans generated.")
+            except Exception as e:
+                print(f"   [CRASH] Error analyzing body {b_name}: {str(e)}")
+                traceback.print_exc()
+
+        # 3. SCDM 실행 스크립트 생성
+        generator = SCDMGenerator(project_root)
+        output_filename = "scdm_decomposition_script.py"
         
-    guide_path = os.path.join(script_dir, "Decomposition_Guide.md")
-    with open(guide_path, "w", encoding="utf-8") as f:
-        f.write(guide_text)
-    
-    print(f"[Success] Planning guide generated: {guide_path}")
-    print(f"=== Pipeline Completed for {sub_device_name} ===")
+        if not os.path.exists(script_dir):
+            os.makedirs(script_dir)
+            
+        output_path = generator.generate_script(all_plans, output_name=output_filename)
+        print(f"\n[Success] Step 3 script generated: {output_path}")
+        
+        # 4. 분석 결과 리포트(MD) 생성
+        try:
+            sys.path.append(os.path.join(os.path.dirname(__file__), 'scdm_bridge'))
+            from guide_generator import GuideGenerator
+            guide_text = f"# Decomposition Strategy Report: {sub_device_name}\n"
+            guide_text += f"- **Model Units**: {current_units}\n\n"
+            
+            for body in bodies_list:
+                strategy, plans = planner.analyze_body(body)
+                guide_text += GuideGenerator.generate_markdown(body.get('body_name','Unknown'), strategy, plans)
+                guide_text += "\n\n"
+                
+            guide_path = os.path.join(script_dir, "Decomposition_Guide.md")
+            with open(guide_path, "w", encoding="utf-8") as f:
+                f.write(guide_text)
+            print(f"[Success] Planning guide generated: {guide_path}")
+        except:
+            print(" [WARN] Failed to generate markdown guide (bridge module missing or error)")
+
+        print(f"\n=== Pipeline Completed for {sub_device_name} ===")
+
+    except Exception as e:
+        print(f"\n[FATAL ERROR] Pipeline failed: {str(e)}")
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == "__main__":
-    # 사용법: python main_run.py [기기이름] [입력파일]
     device = sys.argv[1] if len(sys.argv) > 1 else "TEST_DEVICE"
     input_file = sys.argv[2] if len(sys.argv) > 2 else "geometry_data.json"
-    
     run_pipeline(device, input_file)
