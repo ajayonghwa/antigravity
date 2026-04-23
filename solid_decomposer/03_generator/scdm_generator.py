@@ -103,22 +103,37 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     try:
         print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
         g = SpaceClaim.Api.V22.Geometry
-        origin_pt = g.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
-        direction = g.Direction.Create(axis[0], axis[1], axis[2])
+        # [v5.09] getattr를 사용하여 네임스페이스 충돌 우회
+        p_factory = getattr(g.Point, "Create")
+        d_factory = getattr(g.Direction, "Create")
+        
+        origin_pt = p_factory(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+        direction = d_factory(axis[0], axis[1], axis[2])
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            ref = g.Direction.DirZ
-            if abs(direction.Z) > 0.9: ref = g.Direction.DirX
-            x_axis = g.Direction.Cross(direction, ref)
-            frame = g.Frame.Create(origin_pt, direction, x_axis)
-            circle = g.Circle.Create(frame, MM(offset*1000))
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            # [v5.09] 방향 정렬 최적화: direction이 평면의 Normal이 되도록 프레임 생성
+            ref = getattr(g.Direction, "DirZ")
+            if abs(direction.Z) > 0.9: ref = getattr(g.Direction, "DirX")
+            x_axis = getattr(g.Direction, "Cross")(direction, ref)
             
-            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), None, None)
+            frame_factory = getattr(g.Frame, "Create")
+            frame = frame_factory(origin_pt, direction, x_axis)
+            
+            circle_factory = getattr(g.Circle, "Create")
+            circle = circle_factory(frame, MM(offset*1000))
+            
+            cs_factory = getattr(g.CurveSegment, "Create")
+            dc_factory = getattr(DesignCurve, "Create")
+            dc = dc_factory(root, cs_factory(circle))
+            
+            # [v5.09] ExtrudeEdges 실행 안정성 강화
+            options = ExtrudeEdgeOptions()
+            ExtrudeEdges.Execute(Selection.Create(dc.Edges[0]), origin_pt, direction, MM(10000), options, None)
+            print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
             return
@@ -130,6 +145,7 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
         dc.Delete()
+        print("   [OK] O-Grid complete for {0}".format(targets[0].Name))
     except Exception as e:
         print("   [ERROR] apply_ogrid crashed: " + str(e))
 
@@ -139,26 +155,38 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     try:
         print("   [DEBUG 1] Start split_plane for {0}".format(targets[0].Name))
         g = SpaceClaim.Api.V22.Geometry
-        origin = g.Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
-        normal = g.Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        p_factory = getattr(g.Point, "Create")
+        d_factory = getattr(g.Direction, "Create")
+        
+        origin = p_factory(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
+        normal = d_factory(normal_list[0], normal_list[1], normal_list[2])
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            ref = g.Direction.DirZ
-            if abs(normal.Z) > 0.9: ref = g.Direction.DirX
-            x_axis = g.Direction.Cross(normal, ref)
-            frame = g.Frame.Create(origin, normal, x_axis)
-            circle = g.Circle.Create(frame, MM(20000)) 
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            ref = getattr(g.Direction, "DirZ")
+            if abs(normal.Z) > 0.9: ref = getattr(g.Direction, "DirX")
+            x_axis = getattr(g.Direction, "Cross")(normal, ref)
+            
+            frame_factory = getattr(g.Frame, "Create")
+            frame = frame_factory(origin, normal, x_axis)
+            
+            circle_factory = getattr(g.Circle, "Create")
+            circle = circle_factory(frame, MM(20000)) 
+            
+            cs_factory = getattr(g.CurveSegment, "Create")
+            dc_factory = getattr(DesignCurve, "Create")
+            dc = dc_factory(root, cs_factory(circle))
             
             try:
                 Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
             except:
-                plane_obj = g.Plane.Create(frame)
-                datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
+                plane_factory = getattr(g.Plane, "Create")
+                plane_obj = plane_factory(frame)
+                dp_factory = getattr(DatumPlane, "Create")
+                datum_plane = dp_factory(root, "Cutter_Plane", plane_obj)
                 SplitBody.ByCutter(Selection.Create(targets), Selection.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
                 dc.Delete()
