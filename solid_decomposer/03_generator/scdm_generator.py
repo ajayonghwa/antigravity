@@ -75,38 +75,24 @@ def create_body_component(name_b64, body_idx):
         try:
             target_part = Part.Create(root.Document, comp_name)
             target_comp = Component.Create(root, target_part)
-        except: target_comp = None
+            print(" - [DEBUG] Created component: {{0}}".format(comp_name))
+        except Exception as e: print(" - [ERROR] Comp Creation Failed: {{0}}".format(str(e)))
     BODY_COMP_MAP[body_idx] = target_comp
 
 def _move_body_to_comp(body, body_idx):
     global BODY_COMP_MAP
     target_comp = BODY_COMP_MAP.get(body_idx)
-    if not target_comp: return False
+    if not target_comp:
+        print(" - [DEBUG] target_comp is None for body_idx {{0}}".format(body_idx))
+        return False
     try:
-        # 1차 시도: 네이티브 이동 명령
-        Component.MoveBodiesToComponent(Selection.Create(body), target_comp)
+        # [v4.40] RenameInstance와 유사한 표준 명령어 방식 (MoveToComponent.Execute)
+        MoveToComponent.Execute(Selection.Create(body), target_comp)
         return True
-    except:
-        try:
-            # 2차 시도: 부모 설정 (가장 확실함)
-            body.SetParent(target_comp)
-            return True
-        except:
-            try:
-                # 3차 시도: 데이터 복사 후 원본 삭제
-                body.Copy(target_comp.Template)
-                body.Delete()
-                return True
-            except: return False
-
-def _polish_cutter(body):
-    # [v4.39] 커터를 빨간색 반투명으로 설정하고 숨김 처리
-    try:
-        # 색상 설정 (빨간색, 반투명)
-        body.SetColor(None, Color.FromArgb(120, 255, 0, 0))
-        # 가시성 끔 (이동 확인용으로 일단 주석 처리 가능)
-        # ViewHelper.SetVisibility(Selection.Create(body), Visibility.Hidden)
-    except: pass
+    except Exception as e:
+        print(" - [DEBUG] MoveToComponent failed: {{0}}".format(str(e)))
+        try: body.SetParent(target_comp); return True
+        except: return False
 
 def _safe_split_multi(targets, cutter_face):
     if not targets: return False
@@ -115,14 +101,13 @@ def _safe_split_multi(targets, cutter_face):
     try:
         SplitBody.Execute(Selection.Create(valid_targets), Selection.Create(cutter_face))
         return True
-    except:
-        try: SplitBody.ByCutter(Selection.Create(valid_targets), Selection.Create(cutter_face), True, None); return True
-        except: return False
+    except: return False
 
 def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     tname = base64.b64decode(body_b64).decode('utf-8')
+    print(" -> Step {{0}}: O-GRID for {{1}} ({{2}} bodies)".format(idx, tname, len(targets)))
     origin_pt = Point.Create(center[0], center[1], center[2])
     direction = Direction.Create(axis[0], axis[1], axis[2])
     root = GetRootPart()
@@ -130,14 +115,13 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         circle = Circle.Create(Frame.Create(origin_pt, direction), offset)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle))
-        ExtrudeEdges.Execute(Selection.Create(design_curve), 5.0, ExtrudeEdgeOptions(), None)
+        ExtrudeEdges.Execute(Selection.Create(design_curve), 10.0, ExtrudeEdgeOptions(), None)
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_bodies = [b for b in bodies_after if b not in bodies_before]
         if new_bodies:
             tool = new_bodies[0]
             tool.Name = "Cutter_OGrid_{{0}}".format(idx)
-            _polish_cutter(tool)
-            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Multi-Split Success")
+            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split")
             _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
     except Exception as e: print("    [ERROR] " + str(e))
@@ -146,12 +130,13 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     tname = base64.b64decode(body_b64).decode('utf-8')
+    print(" -> Step {{0}}: {{1}} for {{2}} ({{3}} bodies)".format(idx, strategy, tname, len(targets)))
     origin = Point.Create(origin_list[0], origin_list[1], origin_list[2])
     normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
     root = GetRootPart()
     try:
         bodies_before = list(root.GetDescendants[IDesignBody]())
-        circle_geom = Circle.Create(Frame.Create(origin, normal), 50.0)
+        circle_geom = Circle.Create(Frame.Create(origin, normal), 100.0)
         design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
         Fill.Execute(Selection.Create(design_curve))
         bodies_after = list(root.GetDescendants[IDesignBody]())
@@ -159,8 +144,7 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         if new_bodies:
             tool = new_bodies[0]
             tool.Name = "Cutter_{{0}}_{{1}}".format(strategy, idx)
-            _polish_cutter(tool)
-            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Multi-Split Success")
+            if _safe_split_multi(targets, tool.Faces[0]): print("    [OK] Split")
             _move_body_to_comp(tool, b_idx)
         design_curve.Delete()
     except Exception as e: print("    [ERROR] " + str(e))
