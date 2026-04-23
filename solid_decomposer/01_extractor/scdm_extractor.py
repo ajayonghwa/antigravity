@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.77] face.Shape.GetBoundingBox를 통한 속성 접근 오류 해결
+# [v4.78] Box 객체의 MinCorner/MaxCorner를 통한 좌표 추출 오류 해결
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -30,10 +30,13 @@ def get_face_data(face, matrix_obj):
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
         
-        # [v4.77] face 대신 shape 레벨에서 GetBoundingBox 호출 (속성 오류 해결)
+        # [v4.78] Modeler.Box는 MinCorner, MaxCorner 속성을 가짐
         bbox = shape.GetBoundingBox(matrix_obj)
-        data["box"]["min"] = [round(bbox.Min.X * 1000.0, 6), round(bbox.Min.Y * 1000.0, 6), round(bbox.Min.Z * 1000.0, 6)]
-        data["box"]["max"] = [round(bbox.Max.X * 1000.0, 6), round(bbox.Max.Y * 1000.0, 6), round(bbox.Max.Z * 1000.0, 6)]
+        mi = bbox.MinCorner
+        ma = bbox.MaxCorner
+        data["box"]["min"] = [round(mi.X * 1000.0, 6), round(mi.Y * 1000.0, 6), round(mi.Z * 1000.0, 6)]
+        data["box"]["max"] = [round(ma.X * 1000.0, 6), round(ma.Y * 1000.0, 6), round(ma.Z * 1000.0, 6)]
+        
         c = bbox.Center
         data["origin"] = [round(c.X * 1000.0, 8), round(c.Y * 1000.0, 8), round(c.Z * 1000.0, 8)]
         
@@ -69,7 +72,7 @@ def get_face_data(face, matrix_obj):
     return data
 
 def extract_geometry():
-    print("--- SCDM Robust BBox Extraction (v4.77) ---")
+    print("--- SCDM Box Compatibility Extraction (v4.78) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
@@ -101,5 +104,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete (v4.77 BBox fixed).")
+    print("\n[FINISH] Extraction complete (v4.78 Box Corners fixed).")
 except Exception as e: print("\n[FATAL] " + str(e))
