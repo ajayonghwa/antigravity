@@ -27,26 +27,24 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += f"apply_split_plane('{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
-        # [v4.18] 스페이스클레임 스크립트 에디터 순정 환경 복구
-        # 불필요한 clr.AddReference 및 import 구문을 전면 제거하여 에디터 내장 기능(GetAllBodies 등)과의 충돌을 방지합니다.
+        # [v4.19] GetAllBodies 의존성을 제거하고 IComponent.Content를 활용한
+        # 가장 완벽하고 네이티브한 월드 좌표 기반 인스턴스 순회 방식을 적용합니다.
         script_template = f"""# -*- coding: utf-8 -*-
 import math
 
 ALL_CUTTERS = []
 
-def get_all_bodies_recursive(part, body_list):
-    try:
-        # V22 에디터 환경 내장 메서드 우선
-        for b in part.GetAllBodies(): body_list.append(b)
-        return
-    except: pass
-    
-    for body in part.Bodies: body_list.append(body)
-    for comp in part.Components:
-        if comp.Template: get_all_bodies_recursive(comp.Template, body_list)
+def get_all_bodies_recursive(part_occurrence, body_list):
+    for body in part_occurrence.Bodies:
+        body_list.append(body)
+    for comp in part_occurrence.Components:
+        if hasattr(comp, "Content") and comp.Content:
+            get_all_bodies_recursive(comp.Content, body_list)
+        else:
+            if hasattr(comp, "Template") and comp.Template:
+                get_all_bodies_recursive(comp.Template, body_list)
 
 def get_matching_bodies(target_name):
-    # 한글 비교를 위해 UTF-8 바이트 스트링을 유니코드로 안전하게 변환
     try:
         target_unicode = target_name.decode('utf-8')
     except:
@@ -56,7 +54,6 @@ def get_matching_bodies(target_name):
     get_all_bodies_recursive(GetRootPart(), all_bodies)
     matched = []
     for b in all_bodies:
-        # b.Name은 .NET String이므로 파이썬의 unicode와 비교해야 함
         if b.Name == target_unicode or b.Name.startswith(target_unicode + u"_"):
             matched.append(b)
     return matched
@@ -106,16 +103,12 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
             try: ExtrudeEdges.Execute(sel, Selection.Create(direction), extrude_dist, ExtrudeEdgeOptions(), None)
             except: pass
         
-        # 커터 찾기 (새로 생성된 바디)
-        # 방금 만든 디자인 커브와 연관된 바디를 찾습니다.
         tool = None
         for b in root.Bodies:
             if getattr(b, 'Shape', None) and "Cylinder" in b.Shape.Geometry.GetType().Name:
                 if b.Name.startswith("Solid") or b.Name.startswith("솔리드"):
-                    # 매우 최근에 만들어진 바디로 추정
                     tool = b
                     
-        # 만약 못 찾았으면 모든 바디 중 마지막 바디를 선택
         if not tool and root.Bodies.Count > 0:
             tool = root.Bodies[-1]
             

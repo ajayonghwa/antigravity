@@ -43,7 +43,7 @@ def get_face_data(face):
     return data
 
 def extract_geometry():
-    print("--- SCDM Native Extraction (v4.18) ---")
+    print("--- SCDM Native Content Extraction (v4.19) ---")
     all_bodies_data = []
     root = GetRootPart()
     if not root: return [], [], "m"
@@ -52,23 +52,34 @@ def extract_geometry():
     try: unit_str = str(root.Document.Units.Length.Symbol)
     except: pass
 
-    # 스페이스클레임 스크립트 에디터 환경에 내장된 GetAllBodies() 사용
+    # [v4.19] GetAllBodies() 의존성 제거, 가장 완벽한 Content 기반 재귀 탐색
+    # 컴포넌트의 Template(마스터/로컬좌표) 대신 Content(인스턴스/월드좌표)를 순회합니다.
+    bodies = []
+    def get_all_occurrences(part_occurrence, b_list):
+        for b in part_occurrence.Bodies:
+            b_list.append(b)
+        for c in part_occurrence.Components:
+            # c.Content는 부모 컨텍스트를 유지하는 IPart 인스턴스이므로
+            # 여기서 뽑아낸 바디는 자동으로 월드 좌표계를 가집니다.
+            if hasattr(c, "Content") and c.Content:
+                get_all_occurrences(c.Content, b_list)
+            else:
+                # Content 속성이 없는 버전에 대비 (가상 컴포넌트 등)
+                if hasattr(c, "Template") and c.Template:
+                    get_all_occurrences(c.Template, b_list)
+
     try:
-        bodies = root.GetAllBodies()
-    except:
-        try:
-            bodies = root.Bodies
-        except Exception as e:
-            print(" - [FATAL] Failed to get bodies: " + str(e))
-            return [], [], "m"
+        get_all_occurrences(root, bodies)
+    except Exception as e:
+        print(" - [FATAL] Failed to collect occurrences: " + str(e))
             
-    print(" - Found {0} bodies".format(bodies.Count if hasattr(bodies, "Count") else len(list(bodies))))
+    print(" - Found {0} bodies".format(len(bodies)))
 
     for i, body in enumerate(bodies):
         try:
             bname = body.Name
             uname = "AUTO_BODY_" + str(i)
-            # body.Name = uname # 이름 보존
+            # body.Name = uname # (선택) 원래 이름 보존
             
             body_data = {
                 "body_index": i, "body_name": bname, "original_name": bname,
