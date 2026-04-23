@@ -101,40 +101,48 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     try:
-        print("   [DEBUG 1] Start ogrid for {0}".format(targets[0].Name))
-        origin_pt = Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
-        direction = Direction.Create(axis[0], axis[1], axis[2])
+        print("   [DEBUG 1.0] Start ogrid for {0}".format(targets[0].Name))
+        # [v5.13] API Shield: 모든 호출에 절대 경로 강제 적용
+        g = SpaceClaim.Api.V22.Geometry
+        m = SpaceClaim.Api.V22.Modeler
+        s = SpaceClaim.Api.V22.Scripting
+        
+        origin_pt = g.Point.Create(MM(center[0]*1000), MM(center[1]*1000), MM(center[2]*1000))
+        print("   [DEBUG 1.1] Point created")
+        direction = g.Direction.Create(axis[0], axis[1], axis[2])
+        print("   [DEBUG 1.2] Direction created")
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            # [v5.12] 90도 회전 방지: Frame을 통해 법선 방향을 명확히 정의
-            temp_frame = Frame.Create(origin_pt, direction)
-            circle = Circle.Create(temp_frame, MM(offset*1000))
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            temp_frame = g.Frame.Create(origin_pt, direction)
+            print("   [DEBUG 1.3] Frame created")
+            circle = g.Circle.Create(temp_frame, MM(offset*1000))
+            dc = m.DesignCurve.Create(root, g.CurveSegment.Create(circle))
+            print("   [DEBUG 1.4] DesignCurve created")
             
-            # [v5.12] Selection 네임스페이스 충돌 해결: 전체 경로 호출
-            sel_class = SpaceClaim.Api.V22.Scripting.Selection
+            sel_class = s.Selection.Selection
             sel_obj = sel_class.Create(dc.Edges[0])
             
-            # [v5.12] 사용자 성공 구문 반영: ExtrudeEdges.Execute
             options = ExtrudeEdgeOptions()
+            # [v5.13] 사용자 Record 구문 정밀 반영
             ExtrudeEdges.Execute(sel_obj, direction, MM(10000), options, None)
-            print("   [DEBUG 2] ExtrudeEdges success")
+            print("   [DEBUG 2.0] ExtrudeEdges success")
         except Exception as ce:
-            print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
+            print("   [DEBUG 2-FAIL] Sub-step failed: " + str(ce))
             return
 
         bodies_after = list(root.GetDescendants[IDesignBody]())
         new_b = next((b for b in bodies_after if b not in bodies_before), None)
         if new_b:
             try: 
-                # [v5.12] 사용자 성공 구문 반영: SplitBody.ByCutter
+                # [v5.13] 사용자 성공 구문 반영: SplitBody.ByCutter
                 target_sel = sel_class.Create(targets)
                 cutter_sel = sel_class.Create(new_b.Faces[0])
                 SplitBody.ByCutter(target_sel, cutter_sel, True, None)
+                print("   [DEBUG 3.0] SplitBody success")
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
         dc.Delete()
@@ -146,25 +154,30 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
     targets = get_matching_bodies(body_b64)
     if not targets: return
     try:
-        print("   [DEBUG 1] Start split_plane for {0}".format(targets[0].Name))
-        origin = Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
-        normal = Direction.Create(normal_list[0], normal_list[1], normal_list[2])
+        print("   [DEBUG 1.0] Start split_plane for {0}".format(targets[0].Name))
+        g = SpaceClaim.Api.V22.Geometry
+        m = SpaceClaim.Api.V22.Modeler
+        s = SpaceClaim.Api.V22.Scripting
+
+        origin = g.Point.Create(MM(origin_list[0]*1000), MM(origin_list[1]*1000), MM(origin_list[2]*1000))
+        normal = g.Direction.Create(normal_list[0], normal_list[1], normal_list[2])
         
         doc = Window.ActiveWindow.Document
         root = doc.MainPart
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            temp_frame = Frame.Create(origin, normal)
-            circle = Circle.Create(temp_frame, MM(20000)) 
-            dc = DesignCurve.Create(root, CurveSegment.Create(circle))
+            temp_frame = g.Frame.Create(origin, normal)
+            circle = g.Circle.Create(temp_frame, MM(20000)) 
+            dc = m.DesignCurve.Create(root, g.CurveSegment.Create(circle))
             
-            sel_class = SpaceClaim.Api.V22.Scripting.Selection
+            sel_class = s.Selection.Selection
             try:
                 Fill.Execute(sel_class.Create(dc.Edges[0]), None, None)
+                print("   [DEBUG 2.0] Fill success")
             except:
-                plane_obj = Plane.Create(temp_frame)
-                datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
+                plane_obj = g.Plane.Create(temp_frame)
+                datum_plane = m.DatumPlane.Create(root, "Cutter_Plane", plane_obj)
                 SplitBody.ByCutter(sel_class.Create(targets), sel_class.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
                 dc.Delete()
@@ -177,6 +190,7 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
                     target_sel = sel_class.Create(targets)
                     cutter_sel = sel_class.Create(new_b.Faces[0])
                     SplitBody.ByCutter(target_sel, cutter_sel, True, None)
+                    print("   [DEBUG 3.0] SplitBody success")
                 except Exception as se: print("   [WARN] Split failed: " + str(se))
                 _move_to_comp(new_b, b_idx)
             dc.Delete()
