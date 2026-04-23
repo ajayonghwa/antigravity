@@ -4,7 +4,7 @@ import os
 import clr
 import math
 
-# [v4.72] IdentifyHoles API를 활용한 원천적인 구멍 식별
+# [v4.73] MatchStandardSize=False 설정을 통한 모든 구멍 식별
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -30,7 +30,6 @@ def get_face_data(face, matrix_obj, hole_db):
         geom = shape.Geometry
         data["type"] = geom.GetType().Name
         
-        # 1. 전역 좌표 중심점 및 바운딩 박스
         bbox = face.GetBoundingBox(matrix_obj)
         data["box"]["min"] = [round(bbox.Min.X * 1000.0, 6), round(bbox.Min.Y * 1000.0, 6), round(bbox.Min.Z * 1000.0, 6)]
         data["box"]["max"] = [round(bbox.Max.X * 1000.0, 6), round(bbox.Max.Y * 1000.0, 6), round(bbox.Max.Z * 1000.0, 6)]
@@ -40,12 +39,12 @@ def get_face_data(face, matrix_obj, hole_db):
         r_raw = 0.0
         method = ""
         
-        # [v4.72] 0순위: 구멍 데이터베이스(IdentifyHoles) 체크
+        # 0순위: 구멍 데이터베이스 (v4.73 핵심)
         if f_id in hole_db:
             r_raw = hole_db[f_id]
             method = "HOLE_DB"
 
-        # 1순위: 모서리 탐색 (기존 로직 유지)
+        # 1순위: 모서리 탐색
         if r_raw <= 0:
             for edge in face.Edges:
                 eg = edge.Shape.Geometry
@@ -60,7 +59,7 @@ def get_face_data(face, matrix_obj, hole_db):
                 val = getattr(geom, attr, 0.0)
                 if val > 1e-10: r_raw = val; method = "FACE_DEEP"; break
 
-        # 3순위: BBox 추론 (v4.70 logic)
+        # 3순위: BBox 추론
         if r_raw <= 0:
             l_bbox = face.GetBoundingBox(Matrix.Identity)
             dims = sorted([l_bbox.Size.X, l_bbox.Size.Y, l_bbox.Size.Z], reverse=True)
@@ -71,16 +70,14 @@ def get_face_data(face, matrix_obj, hole_db):
                     r_raw = (dims[1] + dims[2]) / 4.0; method = "BBOX_INFER_SMALL"
 
         if r_raw > 0:
-            # 단위 자동 보정
             r_mm = r_raw * 1000.0 if r_raw < 0.1 else r_raw
             data["radius"] = round(r_mm, 8)
             if str(shape.Orientation) == "Reversed": data["is_internal"] = True
             if method == "HOLE_DB":
-                print("   [HOLE] Face {0} linked to detected hole -> R={1:.4f}mm".format(f_id, r_mm))
+                print("   [HOLE] Face {0} (R={1:.4f}mm)".format(f_id, r_mm))
             else:
-                print("   [FOUND] Face {0} -> R={1:.4f}mm via {2}".format(f_id, r_mm, method))
+                print("   [FOUND] Face {0} (R={1:.4f}mm via {2})".format(f_id, r_mm, method))
             
-        # 축 계산
         if hasattr(geom, "Frame"):
             f = geom.Frame
             m = matrix_obj
@@ -93,7 +90,7 @@ def get_face_data(face, matrix_obj, hole_db):
     return data
 
 def extract_geometry():
-    print("--- SCDM Hole-Aware Extraction (v4.72) ---")
+    print("--- SCDM Global Hole Extraction (v4.73) ---")
     final_bodies_data = []
     try:
         root = GetRootPart()
@@ -108,12 +105,14 @@ def extract_geometry():
         print(" - Processing {0} bodies...".format(len(all_bodies)))
         
         for i, body in enumerate(all_bodies):
-            # [v4.72] 구멍 데이터베이스 구축
             hole_db = {}
             try:
-                # IdentifyHoles 옵션 없이 호출 (기본값)
-                holes = body.IdentifyHoles(IdentifyHoleOptions())
-                print("   [HOLE-DATABASE] Found {0} standard holes in body {1}".format(len(holes), i))
+                # [v4.73] 모든 구멍(비표준 포함) 식별 옵션 적용
+                options = IdentifyHoleOptions()
+                options.MatchStandardSize = False
+                
+                holes = body.IdentifyHoles(options)
+                print("   [HOLE-DATABASE] Found {0} total holes in body {1}".format(len(holes), i))
                 for h in holes:
                     h_rad = h.HoleDiameter / 2.0
                     for h_face in h.Faces:
@@ -138,5 +137,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete with Hole-Awareness.")
+    print("\n[FINISH] Universal extraction complete (MatchStandardSize=False).")
 except Exception as e: print("\n[FATAL] " + str(e))
