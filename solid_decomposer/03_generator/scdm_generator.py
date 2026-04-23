@@ -69,7 +69,9 @@ def get_matching_bodies(body_b64):
     except: t_clean = body_b64.lower().strip()
     import re
     try:
-        root = Application.GetActiveDocument().MainPart
+        # [v5.03] 가장 안정적인 활성 문서 접근 방식 사용
+        doc = Window.ActiveWindow.Document
+        root = doc.MainPart
         all_b = root.GetDescendants[m.IDesignBody]()
         pattern = re.compile("^" + re.escape(t_clean) + r"\\d*$")
         matches = [b for b in all_b if pattern.match(b.Name.lower().replace(" ", "")) or b.Name.lower() == t_clean]
@@ -81,11 +83,12 @@ def get_matching_bodies(body_b64):
 
 def _init_comp(name_b64, body_idx):
     try:
-        root = Application.GetActiveDocument().MainPart
+        doc = Window.ActiveWindow.Document
+        root = doc.MainPart
         comp_name = "CUTTERS_{0}".format(body_idx)
         target_comp = next((c for c in root.Components if c.Name == comp_name), None)
         if not target_comp:
-            target_part = m.Part.Create(root.Document, comp_name)
+            target_part = m.Part.Create(doc, comp_name)
             target_comp = m.Component.Create(root, target_part)
         BODY_COMP_MAP[body_idx] = target_comp
     except Exception as ce:
