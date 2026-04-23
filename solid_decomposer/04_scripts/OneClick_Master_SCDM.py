@@ -39,11 +39,14 @@ def run_master_pipeline():
         print("Error: Extractor script not found at " + EXTRACTOR_PATH)
         return
     try:
-        # Extractor 실행 시 OUTPUT_PATH를 전역으로 주입
+        # Extractor 실행 전 OUTPUT_PATH를 전역 변수로 설정
+        global_vars = globals().copy()
+        global_vars['OUTPUT_PATH'] = DATA_PATH
+        
         with open(EXTRACTOR_PATH, 'r') as f:
             extractor_code = f.read()
-            # globals()를 넘기고 locals에 OUTPUT_PATH를 넣어 정의 충돌 방지
-            exec(extractor_code, globals(), {'OUTPUT_PATH': DATA_PATH})
+            # globals와 locals를 분리하지 않고 하나로 통합하여 함수 간 참조 문제 해결
+            exec(extractor_code, global_vars)
         print(" -> Extraction Completed: " + DATA_PATH)
     except Exception as e:
         print(" -> Extraction Failed: " + str(e))
