@@ -53,27 +53,37 @@ def get_matching_bodies(target_name):
     get_all_bodies_recursive(GetRootPart(), all_bodies)
     return [b for b in all_bodies if b.Name == target_name or b.Name.startswith(target_name + "_")]
 
-def _get_safe_range(obj):
-    for attr in ['Range', 'Box', 'BoundingBox', 'Extent']:
-        if hasattr(obj, attr): return getattr(obj, attr)
-    return None
-
 def _get_target_cutter_comp(target_body_name):
-    '''타겟 바디별 전용 커터 컴포넌트 생성'''
     root = GetRootPart()
-    comp_name = "CUTTERS_FOR_" + target_body_name
+    comp_name = "CUTTERS_FOR_" + target_body_name.split("_")[-1] # 인덱스 추출
     for comp in root.Components:
         if comp.Name == comp_name: return comp
     return Component.Create(root, comp_name)
 
+def _safe_split(target_body, cutter_face):
+    '''강화된 분할 로직: 여러 방식을 시도'''
+    try:
+        # 방식 1: 기본 ByCutter
+        res = SplitBody.ByCutter(Selection.Create(target_body), Selection.Create(cutter_face), True, None)
+        if res.CreatedBodies.Count > 0: return True
+    except: pass
+    
+    try:
+        # 방식 2: Selection 직접 주입
+        res = SplitBody.Execute(Selection.Create(target_body), Selection.Create(cutter_face))
+        return True
+    except: pass
+    
+    return False
+
 def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
     try:
         root = GetRootPart()
-        bbox = _get_safe_range(target_body)
+        r = getattr(target_body.Shape, "Range", getattr(target_body, "Box", None))
         extrude_dist = 2.0
-        if bbox:
-            diag = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2)
-            extrude_dist = max(diag * 3.0, 0.1)
+        if r:
+            diag = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2)
+            extrude_dist = max(diag * 4.0, 0.1)
         
         shifted_origin = Point.Create(origin_pt.X - direction.X * extrude_dist/2, 
                                       origin_pt.Y - direction.Y * extrude_dist/2, 
@@ -124,10 +134,10 @@ def apply_ogrid(target_name, center, axis, offset, idx):
                     break
             if not cutter_face: cutter_face = tool.Faces[0]
             
-            try:
-                SplitBody.ByCutter(Selection.Create(target), Selection.Create(cutter_face), True, None)
+            if _safe_split(target, cutter_face):
                 print("    [OK] Split Success")
-            except: pass
+            else:
+                print("    [FAIL] Split failed for {{0}}".format(target.Name))
 
 def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
     global ALL_CUTTERS
@@ -142,10 +152,10 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
 
     for i, target in enumerate(targets):
         try:
-            bbox = _get_safe_range(target)
+            r = getattr(target.Shape, "Range", getattr(target, "Box", None))
             huge_radius = 5.0
-            if bbox:
-                huge_radius = math.sqrt((bbox.Max.X - bbox.Min.X)**2 + (bbox.Max.Y - bbox.Min.Y)**2 + (bbox.Max.Z - bbox.Min.Z)**2) * 3.0
+            if r:
+                huge_radius = math.sqrt((r.Max.X - r.Min.X)**2 + (r.Max.Y - r.Min.Y)**2 + (r.Max.Z - r.Min.Z)**2) * 4.0
             
             circle_geom = Circle.Create(frame, huge_radius)
             design_curve = DesignCurve.Create(root, CurveSegment.Create(circle_geom))
@@ -163,15 +173,15 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
                 tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
                 tool.SetParent(_get_target_cutter_comp(target.Name))
                 ALL_CUTTERS.append(tool)
-                try: 
-                    SplitBody.ByCutter(Selection.Create(target), Selection.Create(tool.Faces[0]), True, None)
+                if _safe_split(target, tool.Faces[0]):
                     print("    [OK] Split Success")
-                except: pass
+                else:
+                    print("    [FAIL] Split failed")
             design_curve.Delete()
         except: pass
 
 def finalize():
-    print(" --- Finished. Cutters preserved in specialized components. ---")
+    print(" --- Finished ---")
     try:
         from SpaceClaim.Api.V22.Commands import PartSharedTopology
         PartSharedTopology.Share(GetRootPart(), None)
