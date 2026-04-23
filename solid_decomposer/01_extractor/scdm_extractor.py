@@ -14,8 +14,6 @@ def get_face_data(face):
             geom = shape.Geometry
             g_type = geom.GetType().Name
             data["type"] = g_type
-            
-            # [v4.32] EvaluationAtParameter(0,0)를 사용해 절대 좌표 점을 직접 얻음
             try:
                 eval_res = face.Evaluate(face.ParameterRange.Start)
                 data["origin"] = [eval_res.Point.X, eval_res.Point.Y, eval_res.Point.Z]
@@ -24,7 +22,6 @@ def get_face_data(face):
                 f = geom.Frame
                 data["origin"] = [f.Origin.X, f.Origin.Y, f.Origin.Z]
                 data["axis"] = [f.DirZ.X, f.DirZ.Y, f.DirZ.Z]
-            
             if "Cylinder" in g_type or "Conical" in g_type:
                 data["radius"] = getattr(geom, "Radius", 0.0)
                 if hasattr(shape, "Orientation") and str(shape.Orientation) == "Reversed": data["is_internal"] = True
@@ -37,32 +34,42 @@ def get_face_data(face):
     return data
 
 def extract_geometry():
-    print("--- SCDM Scene-based Occurrence Extraction (v4.32) ---")
+    print("--- SCDM Robust Renaming & Scene Extraction (v4.33) ---")
     all_bodies_data = []
-    
-    # [v4.32] Window.ActiveWindow.Scene을 통해 화면에 보이는 실제 Occurrence들을 가져옵니다.
     try:
         scene = Window.ActiveWindow.Scene
         bodies = list(scene.GetDescendants[IDesignBody]())
     except:
-        # 실패 시 GetRootPart 백업
         bodies = list(GetRootPart().GetDescendants[IDesignBody]())
         
-    print(" - Found {0} bodies in Scene".format(len(bodies)))
+    print(" - Found {0} bodies".format(len(bodies)))
 
     for i, body in enumerate(bodies):
         try:
             original_name = body.Name
             unique_name = "AUTO_BODY_" + str(i)
-            # Occurrence의 이름을 바꾸면 Master 이름도 바뀔 수 있으나, 고유 식별을 위해 강행
-            body.Name = unique_name
-            body_data = {"body_index": i, "body_name": unique_name, "original_name": original_name, "volume": getattr(body.Shape, "Volume", 0.0), "faces": []}
+            
+            # [v4.33] 읽기 전용 바디 대응: 직접 변경 실패 시 마스터 변경 시도
+            try:
+                body.Name = unique_name
+            except:
+                try:
+                    if hasattr(body, "Master") and body.Master:
+                        body.Master.Name = unique_name
+                    else:
+                        # 마스터도 없으면 그냥 원래 이름 사용 (JSON에는 unique_name으로 기록)
+                        pass
+                except: pass
+            
+            # JSON 데이터에는 unique_name(또는 바뀐 이름)을 기록하여 제너레이터와 동기화
+            actual_name = body.Name
+            body_data = {"body_index": i, "body_name": actual_name, "original_name": original_name, "volume": getattr(body.Shape, "Volume", 0.0), "faces": []}
             for j, face in enumerate(list(body.Faces)):
                 fdata = get_face_data(face)
                 fdata["index"] = j
                 body_data["faces"].append(fdata)
             all_bodies_data.append(body_data)
-            print(" - [OK] Processed: {0}".format(unique_name))
+            print(" - [OK] {0} -> {1}".format(original_name, actual_name))
         except Exception as e: print(" - [ERROR] {0}".format(str(e)))
             
     unit_str = "m"
