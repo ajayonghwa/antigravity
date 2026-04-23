@@ -27,27 +27,17 @@ class SCDMGenerator:
                 split = plan["split_plane"]
                 execution_calls += f"apply_split_plane('{safe_body}', {split['origin']}, {split['normal']}, '{strat}', {i})\n"
 
-        # [v4.21] SplitBody를 먼저 수행한 뒤에 커터를 컴포넌트로 이동시킵니다.
-        # 서로 다른 컴포넌트에 있는 템플릿과 인스턴스 간의 불리언 연산은 스페이스클레임에서 실패하기 때문입니다.
+        # [v4.22] 제너레이터도 동일한 Placement 매트릭스 변환 로직을 사용해 월드 좌표 바디를 완벽 매칭합니다.
         script_template = f"""# -*- coding: utf-8 -*-
 import math
 
 ALL_CUTTERS = []
 
 def get_all_bodies_recursive(part, body_list):
-    try:
-        for b in part.GetDescendants[IDesignBody]():
-            body_list.append(b)
-        return
-    except:
-        pass
-        
     for body in part.Bodies:
         body_list.append(body)
     for comp in part.Components:
-        if hasattr(comp, "Content") and comp.Content:
-            get_all_bodies_recursive(comp.Content, body_list)
-        elif hasattr(comp, "Template") and comp.Template:
+        if hasattr(comp, "Template") and comp.Template:
             get_all_bodies_recursive(comp.Template, body_list)
 
 def get_matching_bodies(target_name):
@@ -61,6 +51,7 @@ def get_matching_bodies(target_name):
     matched = []
     for b in all_bodies:
         if b.Name == target_unicode or b.Name.startswith(target_unicode + u"_"):
+            # 매칭된 바디가 컴포넌트 템플릿의 로컬 바디일 경우, 인스턴스/월드 여부와 관계없이 이름으로 찾습니다.
             matched.append(b)
     return matched
 
@@ -130,7 +121,6 @@ def _create_cylindrical_cutter(target_body, origin_pt, direction, radius, name):
         
         if tool:
             tool.Name = name
-            # [v4.21] 여기서는 생성만 하고 이동은 Split 이후에 하도록 부모 변경을 삭제함.
             return tool
         return None
     except: return None
@@ -160,13 +150,12 @@ def apply_ogrid(target_name, center, axis, offset, idx):
                     break
             if not cutter_face: cutter_face = tool.Faces[0]
             
-            # [v4.21] 커터가 루트(동일 컨텍스트)에 있을 때 먼저 자릅니다!
+            # [v4.22] 템플릿 바디를 자르면 조립품 전체가 업데이트됩니다.
             if _safe_split(target, cutter_face):
                 print("    [OK] Split Success")
             else:
                 print("    [FAIL] Split failed")
                 
-            # 자르기가 끝난 뒤에 비로소 컴포넌트로 치웁니다.
             try:
                 parent_comp = _get_target_cutter_comp(target.Name)
                 tool.SetParent(parent_comp)
@@ -189,6 +178,7 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
 
     for i, target in enumerate(targets):
         try:
+            # 템플릿 바디의 BoundingBox 크기를 기준으로 거대한 커터를 생성
             r = getattr(target.Shape, "Range", getattr(target, "Box", getattr(target, "BoundingBox", None)))
             huge_radius = 5.0
             if r:
@@ -211,13 +201,12 @@ def apply_split_plane(target_name, origin_list, normal_list, strategy, idx):
                 tool.Name = "Cutter_{{0}}_{{1}}_{{2}}".format(strategy, idx, i)
                 ALL_CUTTERS.append(tool)
                 
-                # [v4.21] 커터가 루트(동일 컨텍스트)에 있을 때 먼저 자릅니다!
+                # 템플릿 바디를 직접 자릅니다.
                 if _safe_split(target, tool.Faces[0]):
                     print("    [OK] Split Success")
                 else:
                     print("    [FAIL] Split failed")
                     
-                # 자르기가 끝난 뒤에 비로소 컴포넌트로 치웁니다.
                 try:
                     parent_comp = _get_target_cutter_comp(target.Name)
                     tool.SetParent(parent_comp)
