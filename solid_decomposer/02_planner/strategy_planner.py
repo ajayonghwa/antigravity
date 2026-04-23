@@ -349,7 +349,9 @@ class StrategyPlanner:
     def _plan_ogrid_for_hole(self, hole, axis, neighbor_gap=None, is_main=False):
         radius = hole.get("radius", 0)
         # [v4.56] 단위(units)에 따른 임계값 조정 (m: 0.0001, mm: 0.1)
-        threshold = 0.0001 if self.units == "m" else 0.1
+        is_mm = (self.units == "mm")
+        threshold = 0.1 if is_mm else 0.0001
+        
         if radius < threshold: 
             print("    [SKIP] Radius too small: {0:.4f}{1}".format(radius, self.units))
             return [] 
@@ -364,8 +366,10 @@ class StrategyPlanner:
             
         origin = np.array(hole.get("origin", self.body_center))
         min_wall_dist = float('inf')
+        # 바디 경계면과의 거리 계산 (전역 좌표계 기준)
         for i in range(3):
             if abs(axis[i]) < 0.5:
+                # [v4.80] 바디 센터와 사이즈를 이용한 벽면 거리 계산
                 d1 = abs(origin[i] - (self.body_center[i] - self.body_size[i]/2))
                 d2 = abs(origin[i] - (self.body_center[i] + self.body_size[i]/2))
                 min_wall_dist = min(min_wall_dist, d1, d2)
@@ -373,15 +377,18 @@ class StrategyPlanner:
         rib_thickness = min_wall_dist - radius
         
         # [v4.7] 메인 구멍은 웬만하면 스킵하지 않음
-        safety_limit = radius * 0.1 if not is_main else 0.0001 # 메인 구멍은 0.1mm만 있어도 진행
+        safety_limit = radius * 0.1 if not is_main else (0.1 if is_mm else 0.0001)
+        
+        # 로그 출력용 스케일 (이미 mm면 1배, m면 1000배)
+        log_scale = 1.0 if is_mm else 1000.0
         
         if rib_thickness < safety_limit:
             print("    [SKIP] Rib too thin: {0:.2f}mm (Limit: {1:.2f}mm) for Hole at {2}".format(
-                rib_thickness*1000, safety_limit*1000, [round(x*1000,1) for x in origin]))
+                rib_thickness * log_scale, safety_limit * log_scale, [round(x * log_scale, 1) for x in origin]))
             return []
             
         print("    [PLAN] O-Grid for hole at {0}: Offset={1:.2f}mm".format(
-            [round(x*1000,1) for x in origin], safe_offset*1000))
+            [round(x * log_scale, 1) for x in origin], safe_offset * log_scale))
         return [self._create_ogrid_dict(hole, axis, safe_offset)]
 
     def _create_ogrid_dict(self, hole, axis, offset):
