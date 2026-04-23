@@ -3,7 +3,7 @@ import json
 import os
 import clr
 
-# [v4.60] 재귀 탐색을 통한 전 계층 바디 추출 (Assembly 대응)
+# [v4.61] 전방위 바디 탐색 (1컴포넌트 1바디 예외 대응)
 try:
     clr.AddReference("SpaceClaim.Api.V22")
     from SpaceClaim.Api.V22 import *
@@ -46,36 +46,57 @@ def get_face_data(face, matrix):
     except: pass
     return data
 
-def find_all_bodies(part, matrix, all_bodies):
-    # 1. 현재 파트의 바디 추출
-    for body in part.Bodies:
-        all_bodies.append((body, matrix))
-    
-    # 2. 하위 컴포넌트 재귀 탐색
-    for comp in part.Components:
-        trans = comp.TransformToRoot
-        new_matrix = [[trans.Matrix.M11, trans.Matrix.M12, trans.Matrix.M13, trans.Translation.X*1000.0],
-                      [trans.Matrix.M21, trans.Matrix.M22, trans.Matrix.M23, trans.Translation.Y*1000.0],
-                      [trans.Matrix.M31, trans.Matrix.M32, trans.Matrix.M33, trans.Translation.Z*1000.0]]
-        find_all_bodies(comp.Template, new_matrix, all_bodies)
-
 def extract_geometry():
-    print("--- SCDM Deep Discovery Extraction (v4.60) ---")
+    print("--- SCDM Universal Discovery (v4.61) ---")
     all_bodies_raw = []
     try: 
         root = GetRootPart()
-        identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
-        find_all_bodies(root, identity, all_bodies_raw)
+        print(" - Active Root Part: " + root.Name)
+        
+        # 방식 1: GetDescendants (가장 강력함)
+        try:
+            desc_bodies = list(root.GetDescendants[IDesignBody]())
+            for b in desc_bodies: all_bodies_raw.append(b)
+        except: pass
+        
+        # 방식 2: 만약 방식 1이 실패하거나 부족하면 직접 순회
+        if not all_bodies_raw:
+            print(" - Fallback: Manual Traversal...")
+            for body in root.Bodies: all_bodies_raw.append(body)
+            for comp in root.Components:
+                for body in comp.Template.Bodies: all_bodies_raw.append(body)
+                
+        # 중복 제거 (HashCode 기준)
+        seen_hashes = set()
+        unique_bodies = []
+        for b in all_bodies_raw:
+            h = b.GetHashCode()
+            if h not in seen_hashes:
+                unique_bodies.append(b)
+                seen_hashes.add(h)
+                
     except Exception as re:
         print(" - [ERROR] Discovery Failed: " + str(re))
         return [], [], "mm"
     
-    print(" - Found {0} bodies in hierarchy".format(len(all_bodies_raw)))
+    print(" - Unique bodies found: {0}".format(len(unique_bodies)))
     final_data = []
-    for i, (body, matrix) in enumerate(all_bodies_raw):
+    for i, body in enumerate(unique_bodies):
         b_name = "Unknown"
         try: b_name = body.Name
         except: pass
+        
+        # 좌표 행렬 (기본 Identity)
+        matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+        try:
+            parent = body.ParentComponent
+            if parent:
+                t = parent.TransformToRoot
+                matrix[0][3] = t.Translation.X * 1000.0
+                matrix[1][3] = t.Translation.Y * 1000.0
+                matrix[2][3] = t.Translation.Z * 1000.0
+        except: pass
+        
         vol = 0.0
         try: vol = body.Shape.Volume * 1e9
         except: pass
@@ -92,5 +113,5 @@ try:
     results, warns, uinfo = extract_geometry()
     final = {"sub_device_name": "DEVICE", "units": "mm", "bodies": results}
     with open(OUTPUT_PATH, "w") as f: json.dump(final, f, indent=2)
-    print("\n[FINISH] Extraction complete with hierarchy search.")
+    print("\n[FINISH] Universal extraction complete.")
 except Exception as e: print("\n[FATAL] " + str(e))
