@@ -110,16 +110,18 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            # [v5.11] 2개의 인자만 받는 Circle.Create 시그니처에 맞춤 + 90도 회전 방지
-            # Frame.Create(origin, normal)는 normal을 Z축(법선)으로 설정함
+            # [v5.12] 90도 회전 방지: Frame을 통해 법선 방향을 명확히 정의
             temp_frame = Frame.Create(origin_pt, direction)
             circle = Circle.Create(temp_frame, MM(offset*1000))
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
-            # [v5.11] Selection 참조를 명시적으로 수행
-            sel_obj = Selection.Create(dc.Edges[0])
+            # [v5.12] Selection 네임스페이스 충돌 해결: 전체 경로 호출
+            sel_class = SpaceClaim.Api.V22.Scripting.Selection
+            sel_obj = sel_class.Create(dc.Edges[0])
+            
+            # [v5.12] 사용자 성공 구문 반영: ExtrudeEdges.Execute
             options = ExtrudeEdgeOptions()
-            ExtrudeEdges.Execute(sel_obj, origin_pt, direction, MM(10000), options, None)
+            ExtrudeEdges.Execute(sel_obj, direction, MM(10000), options, None)
             print("   [DEBUG 2] ExtrudeEdges success")
         except Exception as ce:
             print("   [DEBUG 2-FAIL] ExtrudeEdges failed: " + str(ce))
@@ -129,8 +131,9 @@ def apply_ogrid(body_b64, center, axis, offset, idx, b_idx):
         new_b = next((b for b in bodies_after if b not in bodies_before), None)
         if new_b:
             try: 
-                target_sel = Selection.Create(targets)
-                cutter_sel = Selection.Create(new_b.Faces[0])
+                # [v5.12] 사용자 성공 구문 반영: SplitBody.ByCutter
+                target_sel = sel_class.Create(targets)
+                cutter_sel = sel_class.Create(new_b.Faces[0])
                 SplitBody.ByCutter(target_sel, cutter_sel, True, None)
             except Exception as se: print("   [WARN] Split failed: " + str(se))
             _move_to_comp(new_b, b_idx)
@@ -152,17 +155,17 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
         bodies_before = list(root.GetDescendants[IDesignBody]())
         
         try:
-            # [v5.11] 2개의 인자만 받는 Circle.Create 시그니처에 맞춤
             temp_frame = Frame.Create(origin, normal)
             circle = Circle.Create(temp_frame, MM(20000)) 
             dc = DesignCurve.Create(root, CurveSegment.Create(circle))
             
+            sel_class = SpaceClaim.Api.V22.Scripting.Selection
             try:
-                Fill.Execute(Selection.Create(dc.Edges[0]), None, None)
+                Fill.Execute(sel_class.Create(dc.Edges[0]), None, None)
             except:
                 plane_obj = Plane.Create(temp_frame)
                 datum_plane = DatumPlane.Create(root, "Cutter_Plane", plane_obj)
-                SplitBody.ByCutter(Selection.Create(targets), Selection.Create(datum_plane), True, None)
+                SplitBody.ByCutter(sel_class.Create(targets), sel_class.Create(datum_plane), True, None)
                 _move_to_comp(datum_plane, b_idx)
                 dc.Delete()
                 return
@@ -171,8 +174,8 @@ def apply_split_plane(body_b64, origin_list, normal_list, strategy, idx, b_idx):
             new_b = next((b for b in bodies_after if b not in bodies_before), None)
             if new_b:
                 try: 
-                    target_sel = Selection.Create(targets)
-                    cutter_sel = Selection.Create(new_b.Faces[0])
+                    target_sel = sel_class.Create(targets)
+                    cutter_sel = sel_class.Create(new_b.Faces[0])
                     SplitBody.ByCutter(target_sel, cutter_sel, True, None)
                 except Exception as se: print("   [WARN] Split failed: " + str(se))
                 _move_to_comp(new_b, b_idx)
