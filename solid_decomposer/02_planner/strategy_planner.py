@@ -348,8 +348,10 @@ class StrategyPlanner:
 
     def _plan_ogrid_for_hole(self, hole, axis, neighbor_gap=None, is_main=False):
         radius = hole.get("radius", 0)
-        if radius < 0.0001: 
-            print("    [SKIP] Radius too small: {0:.4f}mm".format(radius*1000))
+        # [v4.56] 단위(units)에 따른 임계값 조정 (m: 0.0001, mm: 0.1)
+        threshold = 0.0001 if self.units == "m" else 0.1
+        if radius < threshold: 
+            print("    [SKIP] Radius too small: {0:.4f}{1}".format(radius, self.units))
             return [] 
         
         is_internal = hole.get("is_internal", True)
