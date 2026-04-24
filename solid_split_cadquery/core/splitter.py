@@ -34,7 +34,10 @@ class Splitter:
             return [self.model]
             
     def apply_ogrid_split(self, center, radius, axis):
-        cutter = cq.Workplane(cq.Plane(origin=center, normal=axis)).circle(radius*2.0).extrude(10000, both=True).val()
+        """O-Grid: Separate into inner and outer parts using the cylindrical surface as a cutter."""
+        # Use exact radius to follow the cylindrical face
+        cutter = cq.Workplane(cq.Plane(origin=center, normal=axis)).circle(radius).extrude(10000, both=True).val()
+        
         solid = self.model.val()
         try:
             inner = solid.intersect(cutter)

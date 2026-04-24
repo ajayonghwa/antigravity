@@ -52,23 +52,38 @@ class Classifier:
             "main_axis": (0,0,1)
         }
         
+        cyl_features = []
         for f in self.model.faces().vals():
             if self._get_face_type(f) == "Cylinder":
                 radius = self._get_cylinder_radius(f)
                 if radius < 0.5: continue
                 
-                center = f.Center()
+                # 원통의 기하학적 축 위치(Location)를 직접 추출
+                cyl_geom = BRepAdaptor_Surface(f.wrapped).Cylinder()
+                loc = cyl_geom.Location()
+                actual_center = (round(loc.X(), 2), round(loc.Y(), 2), round(loc.Z(), 2))
                 is_internal = self._is_internal_cylinder(f)
                 
-                dist_to_walls = [abs(center.x - bbox.xmin), abs(center.x - bbox.xmax), abs(center.y - bbox.ymin), abs(center.y - bbox.ymax)]
+                # 중복 제거: 같은 중심과 반지름을 가진 원통은 하나로 취급
+                exists = False
+                for feat in cyl_features:
+                    if feat["radius"] == radius and feat["centers"][0][:2] == actual_center[:2]:
+                        exists = True
+                        break
                 
-                feat = {
-                    "type": "hole" if is_internal else "cylinder",
-                    "radius": radius,
-                    "centers": [center.toTuple()],
-                    "strategy": "BOUNDARY_ISOLATION" if min(dist_to_walls) < radius * 2.5 else ("O-GRID" if is_internal else "H-GRID")
-                }
-                report["features"].append(feat)
+                if not exists:
+                    dist_to_walls = [abs(actual_center[0] - bbox.xmin), abs(actual_center[0] - bbox.xmax), 
+                                     abs(actual_center[1] - bbox.ymin), abs(actual_center[1] - bbox.ymax)]
+                    is_main_disk = radius > min(bbox.xlen, bbox.ylen) * 0.3
+                    
+                    cyl_features.append({
+                        "type": "hole" if is_internal else "cylinder",
+                        "radius": radius,
+                        "centers": [actual_center],
+                        "strategy": "O-GRID" if is_main_disk else ("BOUNDARY_ISOLATION" if min(dist_to_walls) < radius * 2.5 else "O-GRID")
+                    })
+        
+        report["features"].extend(cyl_features)
         return report
 
     def is_primitive(self, body):
