@@ -74,17 +74,23 @@ class Classifier:
                         exists = True
                         break
                 
-                if not exists:
-                    dist_to_walls = [abs(actual_center[0] - bbox.xmin), abs(actual_center[0] - bbox.xmax), 
-                                     abs(actual_center[1] - bbox.ymin), abs(actual_center[1] - bbox.ymax)]
-                    min_dist = min(dist_to_walls)
                     is_main_disk = radius > min(bbox.xlen, bbox.ylen) * 0.3
                     
-                    # 3.0배 이상의 여유가 있을 때만 평면 격리(BOUNDARY_ISOLATION) 시도
-                    # 그 외에는 더 안전한 곡면 절단(O-GRID) 수행
-                    strategy = "O-GRID"
-                    if not is_main_disk and min_dist > radius * 3.0:
-                        strategy = "BOUNDARY_ISOLATION"
+                    # 전략 결정 로직 세분화
+                    if is_main_disk:
+                        strategy = "O-GRID"
+                    elif is_internal:
+                        # 내부 구멍이고 외벽과 충분히 멀면 H-GRID (격자 품질 우선)
+                        # 적당히 가까우면 BOUNDARY_ISOLATION, 아주 가까우면 O-GRID
+                        if min_dist > radius * 4.0:
+                            strategy = "H-GRID"
+                        elif min_dist > radius * 2.5:
+                            strategy = "BOUNDARY_ISOLATION"
+                        else:
+                            strategy = "O-GRID"
+                    else:
+                        # 돌출부(Boss)는 사용자 요청에 따라 옆면 절단(O-GRID) 수행
+                        strategy = "O-GRID"
                     
                     cyl_features.append({
                         "type": "hole" if is_internal else "cylinder",
