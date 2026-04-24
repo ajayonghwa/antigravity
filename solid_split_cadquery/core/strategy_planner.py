@@ -1,32 +1,37 @@
 import cadquery as cq
-import time
 from .splitter import Splitter
 from .classifier import Classifier
+from .ai_planner import AIPlanner
 
 class StrategyPlanner:
-    def __init__(self, model, max_bodies=20, max_time=10, target_score=90, min_vol_ratio=0.03):
+    def __init__(self, model, max_bodies=20, use_ai=False, **kwargs):
         if not hasattr(model, "val"):
             self.model = cq.Workplane("XY").add(model)
         else:
             self.model = model
         self.classifier = Classifier(self.model)
         self.max_bodies = max_bodies
+        self.use_ai = use_ai
         self.total_volume = self.model.val().Volume()
 
-    def plan_and_execute(self):
-        """Advanced iterative decomposition with priority-based feature slicing and plan logging."""
-        print(f"🚀 Starting Advanced Decomposition...")
+    def plan_and_execute(self, ai_plan_json=None):
+        """Iterative decomposition with optional AI-refined planning."""
+        print(f"🚀 Starting {'AI-Driven' if self.use_ai else 'Standard'} Decomposition...")
         active_bodies = [self.model]
         report = self.classifier.get_feature_report()
         
-        # [NEW] 분할 계획(Plan)을 파일로 저장하여 투명성 확보
+        # AI 모드일 때 AI가 제안한 계획으로 리포트 교체
+        if self.use_ai and ai_plan_json:
+            print("  [AI] Applying AI-Refined Strategic Plan...")
+            report = AIPlanner(report).apply_ai_strategy(ai_plan_json)
+        
+        # [Plan Log]
         try:
             import json, os
             os.makedirs("examples/report/plans", exist_ok=True)
-            plan_path = "examples/report/plans/decomposition_plan.json"
+            plan_path = f"examples/report/plans/decomposition_plan_{'ai' if self.use_ai else 'std'}.json"
             with open(plan_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=4)
-            print(f"  [Plan] Decomposition plan saved to {plan_path}")
         except: pass
         
         # 1. Layering (Step Slicing)

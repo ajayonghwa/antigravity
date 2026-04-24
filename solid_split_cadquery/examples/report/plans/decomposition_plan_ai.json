@@ -1,0 +1,31 @@
+{
+    "overall_size": [
+        129.95,
+        126.53,
+        30.0
+    ],
+    "steps": [
+        -15.0,
+        0.0,
+        15.0
+    ],
+    "features": [
+        {
+            "type": "cylinder",
+            "radius": 60.0,
+            "centers": [
+                [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            ],
+            "strategy": "O-GRID"
+        }
+    ],
+    "main_axis": [
+        0,
+        0,
+        1
+    ]
+}
