@@ -3,89 +3,88 @@ import requests
 from loguru import logger
 
 class AIPlanner:
-    def __init__(self, endpoint="http://localhost:11434/api/generate", model="llama3"):
-        self.endpoint = endpoint
+    """Ollama 로컬 AI를 사용하여 솔리드 분할 전략을 수립하는 플래너입니다."""
+    
+    def __init__(self, model="llama3", url="http://localhost:11434/api/generate"):
         self.model = model
-        self.system_prompt = """
-You are an expert in CAD geometry decomposition for Finite Element Analysis (FEA).
-Your goal is to take a summary of a 3D solid and propose a sequence of splitting operations to make it "Hex-Meshable".
-Hex-meshable means the resulting pieces should be as close to simple blocks (6 faces) as possible.
+        self.url = url
 
-Common strategies:
-1. Symmetry Cut: If the object is symmetric, split it along the symmetry plane.
-2. Hole Isolation: Isolate holes using a "Butterfly Grid" or "H-Grid" approach. This usually involves creating planar cuts around the hole.
-3. Step Split: Split at levels where there is a change in thickness (steps).
-4. Core Extraction: For cylindrical objects, extract the central rectangular core.
-
-Available Operations:
-- {"operation": "plane_cut", "axis": "X"|"Y"|"Z", "coordinate": float, "reason": "string"}
-- {"operation": "hole_isolation", "center": [x, y, z], "radius": float, "method": "butterfly"|"grid", "reason": "string"}
-
-Respond ONLY with a JSON object containing:
-{
-  "strategy_description": "A brief explanation of your plan",
-  "splits": [ ... list of operations ... ]
-}
-"""
-
-    def plan_splits(self, geometry_summary):
-        prompt = f"Geometry Summary:\n{json.dumps(geometry_summary, indent=2)}\n\nPropose a splitting strategy."
+    def plan_splits(self, summary):
+        """형상 요약(JSON)을 바탕으로 Ollama에 분할 계획을 요청합니다."""
+        logger.info(f"Requesting AI plan from Ollama ({self.model})...")
         
-        payload = {
-            "model": self.model,
-            "prompt": f"{self.system_prompt}\n\n{prompt}",
-            "stream": False,
-            "format": "json"
-        }
+        prompt = self._build_prompt(summary)
         
         try:
-            logger.info(f"Requesting AI plan from {self.endpoint} using model {self.model}...")
-            response = requests.post(self.endpoint, json=payload, timeout=30)
+            response = requests.post(
+                self.url,
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json"
+                },
+                timeout=30
+            )
             response.raise_for_status()
-            result = response.json()
             
-            # Ollama returns the response in a 'response' field
-            plan_text = result.get("response", "")
-            plan_json = json.loads(plan_text)
-            return plan_json
+            # AI 응답 파싱
+            ai_response_raw = response.json().get("response", "{}")
+            plan = json.loads(ai_response_raw)
+            
+            logger.info("AI Plan successfully received and parsed.")
+            return plan
+
         except Exception as e:
-            logger.error(f"Failed to get AI plan: {e}")
-            return self._get_fallback_plan(geometry_summary)
+            logger.error(f"Ollama call failed: {e}")
+            return self._get_fallback_plan(summary)
+
+    def _build_prompt(self, summary):
+        return f"""
+You are an expert in FEM (Finite Element Method) and CAD solid decomposition.
+Your goal is to propose a splitting plan to achieve a high-quality hexahedral mesh.
+
+Geometric Summary of the target solid:
+{json.dumps(summary, indent=2)}
+
+Please provide a decomposition plan in JSON format only.
+The JSON must follow this structure:
+{{
+  "strategy_description": "A brief name for the strategy",
+  "reasoning": "Explain why you chose these split points",
+  "splits": [
+    {{
+      "operation": "plane_cut",
+      "axis": "X" | "Y" | "Z",
+      "coordinate": float,
+      "reason": "Why split here?"
+    }}
+  ]
+}}
+Only return the JSON object. No other text.
+"""
 
     def _get_fallback_plan(self, summary):
+        """Ollama 호출 실패 시 사용할 기본 룰 베이스 전략입니다."""
         logger.warning("Using fallback heuristic plan.")
-        splits = []
-        # Simple heuristic: split at all steps
-        for i, feat in enumerate(summary.get("features", [])):
-            if feat["type"] == "step":
-                splits.append({
+        plan = {
+            "strategy_description": "Heuristic Fallback Plan",
+            "reasoning": "Ollama connection failed. Applying basic junction-based splits.",
+            "splits": []
+        }
+        
+        for feature in summary.get("features", []):
+            if feature["type"] == "junction":
+                plan["splits"].append({
                     "operation": "plane_cut",
                     "axis": "Z",
-                    "coordinate": feat["location_z"],
-                    "reason": "Split at step (fallback)"
+                    "coordinate": feature["location"][2],
+                    "reason": "Junction-based heuristic split"
                 })
-        return {
-            "strategy_description": "Fallback heuristic plan due to AI failure",
-            "splits": splits
-        }
+        return plan
 
 if __name__ == "__main__":
-    # Test with sample summary
-    test_summary = {
-      "overall_size": [100, 100, 10],
-      "features": [
-        {
-          "type": "hole_pattern",
-          "count": 4,
-          "radius": 2.5,
-          "locations": [[25, 25], [25, 75], [75, 25], [75, 75]],
-          "min_distance_between_holes": 5.0
-        }
-      ],
-      "mesh_goal": "High-quality Hexahedral mesh"
-    }
-    
+    # 간단한 테스트 실행
+    test_summary = {"overall_size": [100, 100, 10], "features": []}
     planner = AIPlanner()
-    # This will likely use fallback if Ollama is not running
-    plan = planner.plan_splits(test_summary)
-    print(json.dumps(plan, indent=2))
+    print(json.dumps(planner.plan_splits(test_summary), indent=2))

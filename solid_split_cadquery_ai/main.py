@@ -36,24 +36,14 @@ def main():
     summary = extractor.extract_summary()
     
     # 3. AI 전략 수립 (Planner)
-    # 실제 환경에서는 여기서 Ollama나 API를 호출합니다. 
-    # 데모를 위해 분석 결과에 따른 기본 전략을 자동 생성합니다.
-    print("🧠 Planning decomposition strategy with AI...")
-    ai_plan = {
-        "strategy_description": "AI-Refined Plan based on Features",
-        "reasoning": f"감지된 {len(summary['features'])}개의 피처를 바탕으로 메쉬 품질을 최적화할 수 있는 분할 평면을 결정했습니다.",
-        "splits": []
-    }
+    # 실시간으로 Ollama 로컬 AI에게 전략을 요청합니다.
+    print("🧠 Planning decomposition strategy with AI (Ollama)...")
+    from src.planner import AIPlanner
+    planner = AIPlanner()
+    ai_plan = planner.plan_splits(summary)
     
-    # 자동 전략 주입 예시 (Junction이 있으면 해당 위치 자르기)
-    for f in summary['features']:
-        if f['type'] == 'junction':
-            ai_plan['splits'].append({
-                "operation": "plane_cut",
-                "axis": "Z", # 기본적으로 Z축 절단 가정
-                "coordinate": f['location'][2],
-                "reason": "Detected Junction Interface"
-            })
+    if not ai_plan.get("splits"):
+        print("⚠️ AI produced an empty plan. Using defaults.")
 
     # 4. 결과 디렉토리 정리
     if os.path.exists(args.output):

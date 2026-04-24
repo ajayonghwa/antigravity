@@ -1,41 +1,47 @@
-# 🧊 Solid Split CadQuery AI
+# Solid Split AI - autonomous Geometric Decomposition
 
-AI 기반의 유한요소해석(FEA) 전처리용 솔리드 분할 엔진입니다.
+이 프로젝트는 AI 기반의 기하학적 특징 분석을 통해 유한요소해석(FEA)용 헥사메쉬(Hex-mesh) 생성을 위한 솔리드 분할을 자동화하는 엔진입니다.
 
-## 🚀 프로젝트 개요
-이 프로젝트는 복잡한 3D 솔리드를 육면체 격자(Hex-Mesh) 생성이 용이한 형태로 자동 분할합니다. 사용자님의 지적처럼 아래 3가지 핵심 관점에 집중하여 설계되었습니다:
+## 🚀 주요 기능
+- **기능 기반 형상 인식**: 구멍(Hole), 단차(Step), 튜브(Tube), 접합부(Junction) 자동 추출.
+- **AI 전략 수립**: 추출된 피처를 바탕으로 AI가 최적의 절단면(Cut Plane) 결정.
+- **자동 분할 실행**: CadQuery를 이용한 고정밀 솔리드 절단.
+- **다중 뷰 시각화 리포트**: 분할 전후의 정면/측면/등각뷰를 비교하는 HTML/MD 리포트 자동 생성.
 
-1.  **정밀한 형상 인식 (Feature Extraction)**: CadQuery를 통해 모델의 DNA(구멍, 단차, 크기)를 추출하여 AI에게 전달합니다.
-2.  **구조화된 AI 계획 (AI Planning)**: 로컬 LLM이 JSON 형식으로 실행 가능한 분할 명령을 생성합니다.
-3.  **정확한 기하 연산 (Geometric Execution)**: 생성된 계획에 따라 CadQuery가 물리적 분할을 수행합니다.
-
-## 🛠️ 핵심 모듈 설명
-
-### 1. 형상 추출기 (`src/extractor.py`)
-*   **역할**: 솔리드 모델을 분석하여 AI가 이해할 수 있는 JSON 요약본을 만듭니다.
-*   **주요 기능**: 전체 크기 측정, 구멍 패턴(반지름, 위치, 개수) 감지, 단차(Step) 레벨 분석.
-
-### 2. AI 플래너 (`src/planner.py`)
-*   **역할**: 요약된 정보를 바탕으로 최적의 분할 전략을 수립합니다.
-*   **주요 기능**: 로컬 AI(Ollama 등)와 통신, 실행 가능한 JSON 명령 세트(`splits`) 생성.
-
-### 3. 분할 실행기 (`src/executor.py`)
-*   **역할**: AI의 명령을 받아 실제 CadQuery 코드로 변환하여 실행합니다.
-*   **주요 기능**: 평면 절단(`plane_cut`), 구멍 격리(`hole_isolation`), 결과물 저장.
-
-## 📦 설치 방법
+## 🛠 설치 방법
 ```bash
 pip install -r requirements.txt
 ```
 
-## 📖 사용법
-1.  분석할 `.step` 파일을 `data/input/` 폴더에 넣습니다.
-2.  메인 파이프라인을 실행합니다:
-    ```bash
-    python main.py
-    ```
-3.  `data/output/` 폴더에서 분할된 결과물을 확인합니다.
+## 💻 사용 방법
+### 단일 파일 처리 (추천)
+외부 STEP 파일을 입력받아 분석 및 분할을 수행하고 리포트를 생성합니다.
+```bash
+python3 main.py [input_file.step] --output [report_folder]
+```
 
-## 🤖 AI 설정
-본 엔진은 `http://localhost:11434`에서 실행 중인 로컬 AI 서버(예: Ollama)를 기본으로 사용합니다.
-기본 모델: `llama3` (변경 가능: `src/planner.py`)
+### 데모 및 배치 테스트
+```bash
+# 단일 복합 형상 데모 실행
+python3 demo_full_pipeline.py
+
+# 3종 복합 형상 배치 처리
+python3 batch_ai_pipeline.py
+```
+
+## 🧠 로컬 AI (Ollama) 연동 가이드
+프로젝트를 실제 로컬 LLM과 연동하려면 다음 단계를 따르세요:
+
+1. **Ollama 실행**: `ollama run llama3` (또는 mistral 등)
+2. **src/planner.py 수정**: 
+   - `requests` 모듈을 사용하여 `http://localhost:11434/api/generate`로 JSON 요약을 전달합니다.
+   - 프롬프트에 "결과를 반드시 JSON 형식의 `splits` 배열로 응답하라"는 지시를 포함하세요.
+3. **main.py 수정**:
+   - `ai_plan` 하드코딩 부분을 `planner.plan_strategy(summary)` 호출로 교체합니다.
+
+## 📊 결과 확인
+- **HTML 리포트**: `[output_folder]/index.html`을 브라우저로 열면 3D 뷰 및 다중 뷰 비교를 확인할 수 있습니다.
+- **문서 리포트**: `[output_folder]/decomposition_report.md`에서 AI의 판단 근거를 확인할 수 있습니다.
+
+---
+*Developed by Gemini Solid-Split Engine*
