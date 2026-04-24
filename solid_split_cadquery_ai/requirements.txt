@@ -1,0 +1,5 @@
+cadquery
+pydantic
+requests
+numpy
+loguru
