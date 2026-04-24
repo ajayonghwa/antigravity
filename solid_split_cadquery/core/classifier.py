@@ -35,9 +35,11 @@ class Classifier:
             if self._get_face_type(face) == "Plane":
                 n = face.normalAt(face.Center())
                 if abs(n.z) > 0.99:
-                    z_levels.append(round(face.Center().z, 3))
+                    z_levels.append(face.Center().z)
         if not z_levels: return []
         z_levels = sorted(list(set(z_levels)))
+        
+        # 0.5mm 이내의 단차는 하나로 병합
         unique = [z_levels[0]]
         for z in z_levels[1:]:
             if z - unique[-1] > 0.5: unique.append(z)
@@ -58,29 +60,37 @@ class Classifier:
                 radius = self._get_cylinder_radius(f)
                 if radius < 0.5: continue
                 
-                # 원통의 기하학적 축 위치(Location)를 직접 추출
                 cyl_geom = BRepAdaptor_Surface(f.wrapped).Cylinder()
                 loc = cyl_geom.Location()
-                actual_center = (round(loc.X(), 2), round(loc.Y(), 2), round(loc.Z(), 2))
+                actual_center = (loc.X(), loc.Y(), loc.Z())
                 is_internal = self._is_internal_cylinder(f)
                 
-                # 중복 제거: 같은 중심과 반지름을 가진 원통은 하나로 취급
+                # 중복 제거: 0.5mm 이내의 거리와 동일 반지름은 하나로 취급
                 exists = False
                 for feat in cyl_features:
-                    if feat["radius"] == radius and feat["centers"][0][:2] == actual_center[:2]:
+                    old_c = feat["centers"][0]
+                    dist = ((old_c[0]-actual_center[0])**2 + (old_c[1]-actual_center[1])**2)**0.5
+                    if abs(feat["radius"] - radius) < 0.1 and dist < 0.5:
                         exists = True
                         break
                 
                 if not exists:
                     dist_to_walls = [abs(actual_center[0] - bbox.xmin), abs(actual_center[0] - bbox.xmax), 
                                      abs(actual_center[1] - bbox.ymin), abs(actual_center[1] - bbox.ymax)]
+                    min_dist = min(dist_to_walls)
                     is_main_disk = radius > min(bbox.xlen, bbox.ylen) * 0.3
+                    
+                    # 3.0배 이상의 여유가 있을 때만 평면 격리(BOUNDARY_ISOLATION) 시도
+                    # 그 외에는 더 안전한 곡면 절단(O-GRID) 수행
+                    strategy = "O-GRID"
+                    if not is_main_disk and min_dist > radius * 3.0:
+                        strategy = "BOUNDARY_ISOLATION"
                     
                     cyl_features.append({
                         "type": "hole" if is_internal else "cylinder",
                         "radius": radius,
                         "centers": [actual_center],
-                        "strategy": "O-GRID" if is_main_disk else ("BOUNDARY_ISOLATION" if min(dist_to_walls) < radius * 2.5 else "O-GRID")
+                        "strategy": strategy
                     })
         
         report["features"].extend(cyl_features)
