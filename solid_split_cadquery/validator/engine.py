@@ -55,97 +55,25 @@ class ValidationEngine:
 
     def calculate_hex_readiness(self, body):
         """
-        Calculate a score (0-100) based on how easy it is to hex-mesh this body.
+        Calculate a score (0-100) based on Primitive Fidelity.
+        Score is 100 if the body is a Box, Cylinder, Hollow Cylinder, or their 1/2-1/4 Sectors.
         """
-        if body.val() is None: return {"total_score": 0}
+        from core.classifier import Classifier
+        classifier = Classifier(None)
         
-        faces = body.faces().vals()
-        face_count = len(faces)
+        primitive_type = classifier.is_primitive(body)
         
-        # 1. Face Count Score (Ideal = 6)
-        # Penalty: 10 points for each face away from 6
-        face_score = max(0, 100 - abs(face_count - 6) * 10)
-        
-        # 2. Orthogonality Score (Enhanced for Sweepable Curved Faces)
-        ortho_score = 100
-        try:
-            normals = [f.normalAt(f.Center()) for f in faces]
-            ortho_violations = 0
-            for i, n1 in enumerate(normals):
-                n1_np = np.array([n1.x, n1.y, n1.z])
-                ortho_count = 0
-                for j, n2 in enumerate(normals):
-                    if i == j: continue
-                    n2_np = np.array([n2.x, n2.y, n2.z])
-                    dot = abs(np.dot(n1_np, n2_np))
-                    # Standard orthogonal check (dot ~ 0 or 1)
-                    if dot < 0.2: # Orthogonal
-                        ortho_count += 1
-                
-                # [Expert Update] If it's a 6-faced body, allow for sweepable curved faces
-                if face_count == 6:
-                    # In a sweepable cylinder sector, you might have fewer than 4 perfect ortho neighbors
-                    # but it's still highly meshable.
-                    if ortho_count < 2: ortho_violations += 1
-                else:
-                    if ortho_count < 4: ortho_violations += 1
-                    
-            ortho_score = max(0, 100 - (ortho_violations * 10))
-        except:
-            ortho_score = 50 # Fallback
+        if primitive_type:
+            total_score = 100.0
+        else:
+            # Fallback for non-primitives: give a low score based on face count
+            faces = body.faces().vals()
+            total_score = max(0, 50 - abs(len(faces) - 6) * 5)
             
-        # 3. Aspect Ratio Score
-        try:
-            bbox = body.val().BoundingBox()
-            dims = sorted([bbox.xlen, bbox.ylen, bbox.zlen])
-            aspect_ratio = dims[2] / dims[0] if dims[0] > 0 else 100
-            aspect_score = max(0, 100 - (aspect_ratio - 1) * 5)
-        except:
-            aspect_ratio = 100
-            aspect_score = 0
-
-        # 4. Skewness Score (NEW)
-        # 각 면의 법선벡터가 가장 가까운 주축(X/Y/Z)에서 벗어난 평균 각도
-        # 0° = 완전 정렬(100점), 45° 이상 = 0점
-        skewness_score = 100
-        try:
-            principal_axes = [
-                np.array([1, 0, 0]),
-                np.array([0, 1, 0]),
-                np.array([0, 0, 1])
-            ]
-            deviations = []
-            for f in faces:
-                n = f.normalAt(f.Center())
-                n_np = np.array([n.x, n.y, n.z])
-                n_norm = np.linalg.norm(n_np)
-                if n_norm < 1e-9:
-                    continue
-                n_np = n_np / n_norm
-                # 가장 가까운 주축과의 각도 (절댓값으로 방향 무관하게 계산)
-                min_dev = min(
-                    np.degrees(np.arccos(np.clip(abs(np.dot(n_np, ax)), 0.0, 1.0)))
-                    for ax in principal_axes
-                )
-                deviations.append(min_dev)
-            if deviations:
-                avg_deviation = np.mean(deviations)
-                # 45° → 0점, 0° → 100점 (선형 보간)
-                skewness_score = max(0.0, 100.0 - (avg_deviation / 45.0) * 100.0)
-        except:
-            skewness_score = 50  # Fallback
-
-        # 가중치: face 35% / ortho 35% / aspect 15% / skewness 15%
-        total_score = (face_score * 0.35) + (ortho_score * 0.35) + (aspect_score * 0.15) + (skewness_score * 0.15)
-
         return {
             "total_score": total_score,
-            "face_count": face_count,
-            "face_score": face_score,
-            "ortho_score": ortho_score,
-            "aspect_ratio": aspect_ratio,
-            "aspect_score": aspect_score,
-            "skewness_score": skewness_score
+            "primitive_type": primitive_type,
+            "face_count": len(body.faces().vals())
         }
 
 if __name__ == "__main__":
