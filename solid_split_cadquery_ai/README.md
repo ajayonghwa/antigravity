@@ -14,15 +14,21 @@ pip install -r requirements.txt
 ```
 
 ## 💻 사용 방법
-### 단일 파일 처리 (추천)
-외부 STEP 파일을 입력받아 분석 및 분할을 수행하고 리포트와 조각 파일들을 생성합니다.
+### 1. 단일 파일 처리 (Single File)
+특정 STEP 파일을 분석하고 리포트를 생성합니다.
 ```bash
-# 기본 실행
-python3 main.py [input_file.step] --output [report_folder]
-
-# 안전 제약 조건 적용 실행 (조각 수 제한 및 최소 부피 설정)
-python3 main.py [input_file.step] --max-parts 15 --min-volume 0.05
+python3 main.py [input_file.step] --output [report_folder] --max-parts 15 --min-volume 0.05
 ```
+
+### 2. 일괄 처리 (Batch Processing)
+`input/` 폴더 내의 모든 `.step` 및 `.stp` 파일을 한꺼번에 처리합니다. 결과는 `output/` 폴더에 파일별로 저장됩니다.
+```bash
+python3 batch_process.py --max-parts 15 --min-volume 0.01
+```
+
+## 📂 지원 확장자
+- **STEP (`.step`, `.stp`)**: 표준 CAD 교환 포맷 (인벤터, 솔리드웍스 등 지원)
+- **IGES (`.iges`, `.igs`)**: 레거시 CAD 포맷 지원 가능
 
 ## 🛡️ 안전 제약 조건 (Safety Constraints)
 AI의 과도한 분할을 방지하기 위한 기능입니다:
