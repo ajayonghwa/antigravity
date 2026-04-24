@@ -65,31 +65,27 @@ class Classifier:
                 actual_center = (loc.X(), loc.Y(), loc.Z())
                 is_internal = self._is_internal_cylinder(f)
                 
-                # 중복 제거: 0.5mm 이내의 거리와 동일 반지름은 하나로 취급
+                # 중복 제거 체크
                 exists = False
                 for feat in cyl_features:
                     old_c = feat["centers"][0]
                     dist = ((old_c[0]-actual_center[0])**2 + (old_c[1]-actual_center[1])**2)**0.5
-                    if abs(feat["radius"] - radius) < 0.1 and dist < 0.5:
+                    if abs(feat["radius"] - radius) < 0.5 and dist < 1.0:
                         exists = True
                         break
                 
+                if not exists:
+                    min_dist = min(abs(actual_center[0] - bbox.xmin), abs(actual_center[0] - bbox.xmax), 
+                                   abs(actual_center[1] - bbox.ymin), abs(actual_center[1] - bbox.ymax))
                     is_main_disk = radius > min(bbox.xlen, bbox.ylen) * 0.3
                     
-                    # 전략 결정 로직 세분화
                     if is_main_disk:
                         strategy = "O-GRID"
                     elif is_internal:
-                        # 내부 구멍이고 외벽과 충분히 멀면 H-GRID (격자 품질 우선)
-                        # 적당히 가까우면 BOUNDARY_ISOLATION, 아주 가까우면 O-GRID
-                        if min_dist > radius * 4.0:
-                            strategy = "H-GRID"
-                        elif min_dist > radius * 2.5:
-                            strategy = "BOUNDARY_ISOLATION"
-                        else:
-                            strategy = "O-GRID"
+                        if min_dist > radius * 4.0: strategy = "H-GRID"
+                        elif min_dist > radius * 2.5: strategy = "BOUNDARY_ISOLATION"
+                        else: strategy = "O-GRID"
                     else:
-                        # 돌출부(Boss)는 사용자 요청에 따라 옆면 절단(O-GRID) 수행
                         strategy = "O-GRID"
                     
                     cyl_features.append({
