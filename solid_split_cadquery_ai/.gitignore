@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Project Reports (Temporary)
+report*/
+my_result_report*/
+output_report/
+
+# Input Models
+input/
+
+# Scratch & Temporary
+scratch/
+.DS_Store
