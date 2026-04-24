@@ -41,7 +41,7 @@ class AIPlanner:
 
     def _build_prompt(self, summary):
         # 제약 조건 설정 (엔지니어링 가이드)
-        max_parts = 15
+        max_parts = 50
         min_vol_percent = 1.0 # 1%
         
         return f"""
@@ -52,6 +52,14 @@ Constraints:
 1. MAX_PARTS: Total part count must not exceed {max_parts}.
 2. MIN_VOLUME: Each resulting part must be at least {min_vol_percent}% of original volume.
 3. EFFICIENCY: Prioritize sweepable regions and isolate holes/junctions.
+4. CENTROID ALIGNMENT: For cylindrical features (holes/tubes), split planes should preferably pass through the center coordinates of the feature to facilitate O-grid or Butterfly structured meshing.
+5. SLIVER PREVENTION: Avoid creating "short edges" or narrow "sliver" faces. Do not place a cutting plane extremely close to an existing feature edge or another cutting plane. Maintain reasonable clearance.
+6. HOLE BOUNDARY CLEARANCE: Avoid "skimming" hole edges. Maintain a clearance of at least 25% of the radius if not cutting through the center.
+7. LIGAMENT FIDELITY: For perforated patterns, ensure cuts allow for clear analysis of ligaments between holes (e.g., bisecting or isolating the ligament zones midway).
+8. TOPOLOGICAL CONFORMITY: Aim for simple, matching interfaces between parts to facilitate easy nodal sharing (conformal mesh) during FEM assembly.
+9. EXACT COORDINATES: Numerical precision is absolute. You MUST use the exact coordinate values provided in the "Location" or "key_coordinates" data for any splitting plane. NEVER round, truncate, or simplify these numbers (e.g., if a location is 51.962, the split MUST be exactly at 51.962).
+10. CENTER-CUT PRIORITY: When splitting near cylindrical features, ALWAYS prioritize cutting through the exact center (Location) of the feature. This is superior for structured meshing. Only cut between features (mid-ligament) if it is explicitly required to stay within the MAX_PARTS limit.
+11. NO APPROXIMATION: Never guess coordinates. Always cross-reference your chosen coordinates with the "key_coordinates" list in the summary. If you intend to bisect a feature, copy and paste its location coordinate exactly.
 
 Geometric Summary:
 {json.dumps(summary, indent=2)}

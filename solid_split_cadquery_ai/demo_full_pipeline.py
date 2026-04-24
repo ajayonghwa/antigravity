@@ -126,7 +126,27 @@ def generate_report_md(output_dir, plan, summary):
 AI가 형상에서 추출한 주요 데이터입니다:
 """
     for i, f in enumerate(summary['features']):
-        md_content += f"- **피처 {i+1}**: Type: `{f['type']}`, Location: `{f.get('location', 'N/A')}`\n"
+        loc = f.get('location') or f.get('location_z', 'N/A')
+        norm = f.get('normal_vector', 'N/A')
+        depth = f.get('depth', 'N/A')
+        bbox = f.get('bbox', 'N/A')
+        
+        md_content += f"- **피처 {i+1}**: Type: `{f['type']}`\n"
+        md_content += f"  - Location: `{loc}`\n"
+        md_content += f"  - Normal: `{norm}`\n"
+        md_content += f"  - Depth: `{depth}`\n"
+        
+        # 반경 정보 추가
+        if 'radius' in f:
+            md_content += f"  - Radius: `{f['radius']}`\n"
+        if 'inner_radii' in f:
+            md_content += f"  - Inner Radii: `{f['inner_radii']}`\n"
+        if 'outer_radii' in f:
+            md_content += f"  - Outer Radii: `{f['outer_radii']}`\n"
+        if 'radii' in f:
+            md_content += f"  - Radii: `{f['radii']}`\n"
+            
+        md_content += f"  - BBox: `{bbox}`\n"
 
     md_content += f"""
 ## 3. AI 분할 전략 (AI Strategy & Reasoning)

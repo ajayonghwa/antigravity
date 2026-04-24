@@ -16,18 +16,29 @@ class GeometryExtractor:
         return "Other"
 
     def _get_cylinder_info(self, face):
-        cyl = BRepAdaptor_Surface(face.wrapped).Cylinder()
+        adaptor = BRepAdaptor_Surface(face.wrapped)
+        cyl = adaptor.Cylinder()
         radius = cyl.Radius()
-        
-        # Use the actual center of the face for more accurate position
-        # face.Center() returns the centroid of the face segment.
         center = face.Center()
-        
         axis = cyl.Axis().Direction()
+        
+        # Calculate depth using V-parameters of the surface
+        v_min = adaptor.FirstVParameter()
+        v_max = adaptor.LastVParameter()
+        depth = round(abs(v_max - v_min), 3)
+        
+        # Get bounding box of the face
+        bbox = face.BoundingBox()
+        
         return {
             "radius": round(radius, 3),
             "location": [round(center.x, 3), round(center.y, 3), round(center.z, 3)],
-            "axis": [round(axis.X(), 3), round(axis.Y(), 3), round(axis.Z(), 3)]
+            "normal_vector": [round(axis.X(), 3), round(axis.Y(), 3), round(axis.Z(), 3)],
+            "depth": depth,
+            "bbox": {
+                "min": [round(bbox.xmin, 3), round(bbox.ymin, 3), round(bbox.zmin, 3)],
+                "max": [round(bbox.xmax, 3), round(bbox.ymax, 3), round(bbox.zmax, 3)]
+            }
         }
 
     def _is_internal_cylinder(self, face):
@@ -62,8 +73,8 @@ class GeometryExtractor:
             found = False
             for group in coaxial_groups:
                 # 축 방향 일치 확인
-                axis_match = np.allclose(group["axis"], info["axis"], atol=1e-3) or \
-                             np.allclose(group["axis"], [-a for a in info["axis"]], atol=1e-3)
+                axis_match = np.allclose(group["normal_vector"], info["normal_vector"], atol=1e-3) or \
+                             np.allclose(group["normal_vector"], [-a for a in info["normal_vector"]], atol=1e-3)
                 # 축 상의 위치 확인 (축 방향 벡터와 두 위치의 차이가 평행한지)
                 if axis_match:
                     v = np.array(info["location"]) - np.array(group["location"])
@@ -71,7 +82,7 @@ class GeometryExtractor:
                         dist_to_axis = 0
                     else:
                         v_norm = v / np.linalg.norm(v)
-                        dist_to_axis = np.linalg.norm(np.cross(v_norm, group["axis"]))
+                        dist_to_axis = np.linalg.norm(np.cross(v_norm, group["normal_vector"]))
                     
                     if dist_to_axis < 0.1: # 같은 축 선상에 있음
                         group["elements"].append(info)
@@ -80,7 +91,7 @@ class GeometryExtractor:
             
             if not found:
                 coaxial_groups.append({
-                    "axis": info["axis"],
+                    "normal_vector": info["normal_vector"],
                     "location": info["location"],
                     "elements": [info]
                 })
@@ -88,6 +99,13 @@ class GeometryExtractor:
         features = []
         for group in coaxial_groups:
             elements = group["elements"]
+            # 그룹 전체의 bounding box 계산
+            group_bbox = {
+                "min": [min(e["bbox"]["min"][i] for e in elements) for i in range(3)],
+                "max": [max(e["bbox"]["max"][i] for e in elements) for i in range(3)]
+            }
+            total_depth = sum(e["depth"] for e in elements)
+
             if len(elements) > 1:
                 # 튜브(Tube) 판별: 동일 위치에 내경/외경이 공존하는 경우
                 internals = [e for e in elements if e["is_internal"]]
@@ -96,20 +114,24 @@ class GeometryExtractor:
                 if internals and externals:
                     features.append({
                         "type": "stepped_tube" if len(elements) > 2 else "tube",
-                        "axis": group["axis"],
+                        "normal_vector": group["normal_vector"],
                         "inner_radii": sorted([e["radius"] for e in internals]),
                         "outer_radii": sorted([e["radius"] for e in externals]),
-                        "location": group["location"]
+                        "location": group["location"],
+                        "depth": total_depth,
+                        "bbox": group_bbox
                     })
                 else:
                     # 단차가 있는 형상 (Stepped Hole or Stepped Shaft)
                     is_mostly_internal = len(internals) > len(externals)
                     features.append({
                         "type": "stepped_hole" if is_mostly_internal else "stepped_shaft",
-                        "axis": group["axis"],
+                        "normal_vector": group["normal_vector"],
                         "radii": sorted([e["radius"] for e in elements]),
                         "element_count": len(elements),
-                        "location": group["location"]
+                        "location": group["location"],
+                        "depth": total_depth,
+                        "bbox": group_bbox
                     })
             else:
                 # 단일 실린더/구멍
@@ -118,7 +140,9 @@ class GeometryExtractor:
                     "type": "hole" if e["is_internal"] else "cylinder",
                     "radius": e["radius"],
                     "location": e["location"],
-                    "axis": e["axis"]
+                    "normal_vector": e["normal_vector"],
+                    "depth": e["depth"],
+                    "bbox": e["bbox"]
                 })
         return features
 
@@ -162,7 +186,11 @@ class GeometryExtractor:
                     "type": "junction",
                     "location": [round(pnt.x, 3), round(pnt.y, 3), round(pnt.z, 3)],
                     "connection": f"{types[0]}-{types[1]}",
-                    "reason": "Concave boundary"
+                    "reason": "Concave boundary",
+                    "bbox": {
+                        "min": [round(pnt.x-1, 3), round(pnt.y-1, 3), round(pnt.z-1, 3)],
+                        "max": [round(pnt.x+1, 3), round(pnt.y+1, 3), round(pnt.z+1, 3)]
+                    }
                 })
         
         # 근접한 정션 포인트 그룹화 (중복 제거)
@@ -180,6 +208,9 @@ class GeometryExtractor:
         return unique_junctions
 
     def detect_steps(self):
+        bbox = self.model.val().BoundingBox()
+        z_min, z_max = bbox.zmin, bbox.zmax
+        
         z_levels = []
         for face in self.model.faces().vals():
             if self._get_face_type(face) == "Plane":
@@ -198,10 +229,21 @@ class GeometryExtractor:
         
         steps = []
         for i in range(len(merged) - 1):
+            h = round(merged[i+1] - merged[i], 3)
+            z_loc = merged[i+1]
+            
+            if abs(merged[i] - z_min) < 0.1 and abs(merged[i+1] - z_max) < 0.1:
+                continue
+                
             steps.append({
                 "type": "step",
-                "height": round(merged[i+1] - merged[i], 3),
-                "location_z": merged[i+1]
+                "height": h,
+                "location_z": z_loc,
+                "normal_vector": [0, 0, 1],
+                "bbox": {
+                    "min": [round(bbox.xmin, 3), round(bbox.ymin, 3), round(merged[i], 3)],
+                    "max": [round(bbox.xmax, 3), round(bbox.ymax, 3), round(merged[i+1], 3)]
+                }
             })
         return steps
 
@@ -209,6 +251,10 @@ class GeometryExtractor:
         bbox = self.model.val().BoundingBox()
         summary = {
             "overall_size": [round(bbox.xlen, 3), round(bbox.ylen, 3), round(bbox.zlen, 3)],
+            "bounding_box": {
+                "min": [round(bbox.xmin, 3), round(bbox.ymin, 3), round(bbox.zmin, 3)],
+                "max": [round(bbox.xmax, 3), round(bbox.ymax, 3), round(bbox.zmax, 3)]
+            },
             "features": [],
             "mesh_goal": "High-quality Hexahedral mesh for stress analysis"
         }
@@ -216,6 +262,22 @@ class GeometryExtractor:
         summary["features"].extend(self.detect_cylindrical_features())
         summary["features"].extend(self.detect_steps())
         summary["features"].extend(self.detect_junctions())
+        
+        # Collect all unique key coordinates to help AI avoid rounding errors
+        coords = {"X": set(), "Y": set(), "Z": set()}
+        for f in summary["features"]:
+            if "location" in f:
+                coords["X"].add(f["location"][0])
+                coords["Y"].add(f["location"][1])
+                coords["Z"].add(f["location"][2])
+            if "location_z" in f:
+                coords["Z"].add(f["location_z"])
+        
+        summary["key_coordinates"] = {
+            "X": sorted(list(coords["X"])),
+            "Y": sorted(list(coords["Y"])),
+            "Z": sorted(list(coords["Z"]))
+        }
         
         return summary
 
