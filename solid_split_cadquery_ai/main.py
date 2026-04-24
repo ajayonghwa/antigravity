@@ -64,11 +64,19 @@ def main():
         combined_after = combined_after.add(b)
     after_views = export_svg_views(combined_after, "after", args.output)
     
+    # [NEW] 분할된 개별 솔리드들을 STEP 파일로 저장
+    parts_dir = os.path.join(args.output, "parts")
+    os.makedirs(parts_dir, exist_ok=True)
+    for i, solid in enumerate(solids):
+        part_path = os.path.join(parts_dir, f"part_{i:02d}.step")
+        cq.exporters.export(cq.Workplane(solid), part_path)
+    
     # 8. 최종 리포트 생성
     generate_report_html(args.output, ai_plan, summary, before_views, after_views)
     generate_report_md(args.output, ai_plan, summary)
     
     print(f"\n✅ All steps completed!")
+    print(f"📦 Split Parts saved in: {parts_dir}")
     print(f"📊 Report: {args.output}/index.html")
     print(f"📝 Plan Detail: {args.output}/decomposition_report.md")
 
