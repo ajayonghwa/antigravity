@@ -5,7 +5,7 @@ from loguru import logger
 class AIPlanner:
     """Ollama 로컬 AI를 사용하여 솔리드 분할 전략을 수립하는 플래너입니다."""
     
-    def __init__(self, model="llama3", url="http://localhost:11434/api/generate"):
+    def __init__(self, model="gemma4:e4b", url="http://localhost:11434/api/generate"):
         self.model = model
         self.url = url
 
@@ -24,7 +24,7 @@ class AIPlanner:
                     "stream": False,
                     "format": "json"
                 },
-                timeout=30
+                timeout=60
             )
             response.raise_for_status()
             
