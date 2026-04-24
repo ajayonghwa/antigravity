@@ -9,6 +9,7 @@ venv/
 report*/
 my_result_report*/
 output_report/
+output/
 
 # Input Models
 input/
