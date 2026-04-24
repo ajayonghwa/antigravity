@@ -1,0 +1,54 @@
+{
+    "overall_size": [
+        100.0,
+        100.0,
+        10.0
+    ],
+    "features": [
+        {
+            "type": "hole",
+            "radius": 5.0,
+            "centers": [
+                [
+                    -25.0,
+                    -50.0,
+                    -95.0000002
+                ]
+            ],
+            "strategy": "O-GRID"
+        },
+        {
+            "type": "cylinder",
+            "radius": 5.0,
+            "centers": [
+                [
+                    -25.0,
+                    -25.0,
+                    -95.0000002
+                ]
+            ],
+            "strategy": "BOUNDARY_ISOLATION"
+        },
+        {
+            "type": "cylinder",
+            "radius": 5.0,
+            "centers": [
+                [
+                    0.0,
+                    0.0,
+                    -95.0000002
+                ]
+            ],
+            "strategy": "BOUNDARY_ISOLATION"
+        }
+    ],
+    "steps": [
+        -5.0,
+        5.0
+    ],
+    "main_axis": [
+        0,
+        0,
+        1
+    ]
+}

@@ -14,10 +14,20 @@ class StrategyPlanner:
         self.total_volume = self.model.val().Volume()
 
     def plan_and_execute(self):
-        """Advanced iterative decomposition with priority-based feature slicing."""
+        """Advanced iterative decomposition with priority-based feature slicing and plan logging."""
         print(f"🚀 Starting Advanced Decomposition...")
         active_bodies = [self.model]
         report = self.classifier.get_feature_report()
+        
+        # [NEW] 분할 계획(Plan)을 파일로 저장하여 투명성 확보
+        try:
+            import json, os
+            os.makedirs("examples/report/plans", exist_ok=True)
+            plan_path = "examples/report/plans/decomposition_plan.json"
+            with open(plan_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=4)
+            print(f"  [Plan] Decomposition plan saved to {plan_path}")
+        except: pass
         
         # 1. Layering (Step Slicing)
         z_levels = report.get("steps", [])
