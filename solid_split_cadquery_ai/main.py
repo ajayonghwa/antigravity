@@ -16,8 +16,17 @@ def main():
     parser.add_argument("input", help="Path to the input STEP file")
     parser.add_argument("--output", default="output_report", help="Directory to save the report")
     parser.add_argument("--max-parts", type=int, default=15, help="Maximum number of split parts allowed")
+    parser.add_argument("--max-splits", type=int, default=None, help="Maximum number of splitting operations allowed")
     parser.add_argument("--min-volume", type=float, default=0.01, help="Minimum volume ratio (0.01 = 1%)")
     args = parser.parse_args()
+    
+    # max_splits가 지정되지 않은 경우 max_parts로부터 유추 (예: 16 parts -> 6 splits)
+    if args.max_splits is None:
+        import math
+        # (n+1)^2 <= max_parts -> n+1 <= sqrt(max_parts) -> n <= sqrt(max_parts) - 1
+        # splits = 2 * n
+        n = int(math.sqrt(args.max_parts)) - 1
+        args.max_splits = max(2, n * 2)
 
     if not os.path.exists(args.input):
         print(f"❌ Error: File not found - {args.input}")
@@ -41,7 +50,7 @@ def main():
     # 실시간으로 Ollama 로컬 AI에게 전략을 요청합니다.
     print("🧠 Planning decomposition strategy with AI (Ollama)...")
     from src.planner import AIPlanner
-    planner = AIPlanner()
+    planner = AIPlanner(max_splits=args.max_splits)
     ai_plan = planner.plan_splits(summary)
     
     # 리포트 생성을 위해 필수 키가 있는지 확인하고 기본값을 채웁니다.

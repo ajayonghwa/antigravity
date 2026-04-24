@@ -73,7 +73,7 @@ def generate_report_html(output_dir, plan, summary, before_views, after_views):
                 </div>
                 <div class="card">
                     <div class="label">Reasoning</div>
-                    <div class="value">Junction-based decomposition to isolate the central disk for sweepable meshing.</div>
+                    <div class="value">{plan['reasoning']}</div>
                 </div>
             </div>
 

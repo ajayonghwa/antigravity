@@ -5,43 +5,43 @@ from loguru import logger
 class AIPlanner:
     """Ollama 로컬 AI를 사용하여 솔리드 분할 전략을 수립하는 플래너입니다."""
     
-    def __init__(self, model="gemma4:e4b", url="http://localhost:11434/api/generate"):
-        self.model = model
-        self.url = url
+    def __init__(self, model_name="gemma4:e4b", max_splits=6):
+        self.model_name = model_name
+        self.max_splits = max_splits
+        self.ollama_url = "http://localhost:11434/api/generate"
 
     def plan_splits(self, summary):
         """형상 요약(JSON)을 바탕으로 Ollama에 분할 계획을 요청합니다."""
-        logger.info(f"Requesting AI plan from Ollama ({self.model})...")
+        logger.info(f"Requesting AI plan from Ollama ({self.model_name})...")
         
         prompt = self._build_prompt(summary)
         
         try:
             response = requests.post(
-                self.url,
+                self.ollama_url,
                 json={
-                    "model": self.model,
+                    "model": self.model_name,
                     "prompt": prompt,
                     "stream": False,
                     "format": "json"
                 },
-                timeout=60
+                timeout=120
             )
             response.raise_for_status()
             
             # AI 응답 파싱
-            ai_response_raw = response.json().get("response", "{}")
-            plan = json.loads(ai_response_raw)
+            plan = json.loads(response.json()["response"])
             
             logger.info("AI Plan successfully received and parsed.")
             return plan
 
         except Exception as e:
-            logger.error(f"Ollama call failed: {e}")
-            return self._get_fallback_plan(summary)
+            logger.error(f"AI Planning failed: {e}")
+            return {"strategy_description": "Failed to generate AI plan.", "reasoning": str(e), "splits": []}
 
     def _build_prompt(self, summary):
         # 제약 조건 설정 (엔지니어링 가이드)
-        max_parts = 50
+        max_splits = self.max_splits
         min_vol_percent = 1.0 # 1%
         
         return f"""
@@ -49,7 +49,7 @@ You are an expert in FEM (Finite Element Method) and CAD solid decomposition.
 Your goal is to propose a minimal yet effective splitting plan for high-quality hexahedral mesh.
 
 Constraints:
-1. MAX_PARTS: Total part count must not exceed {max_parts}.
+1. MAX_SPLITS: You must not propose more than {max_splits} total splitting operations (e.g., plane cuts).
 2. MIN_VOLUME: Each resulting part must be at least {min_vol_percent}% of original volume.
 3. EFFICIENCY: Prioritize sweepable regions and isolate holes/junctions.
 4. CENTROID ALIGNMENT: For cylindrical features (holes/tubes), split planes should preferably pass through the center coordinates of the feature to facilitate O-grid or Butterfly structured meshing.
@@ -58,8 +58,9 @@ Constraints:
 7. LIGAMENT FIDELITY: For perforated patterns, ensure cuts allow for clear analysis of ligaments between holes (e.g., bisecting or isolating the ligament zones midway).
 8. TOPOLOGICAL CONFORMITY: Aim for simple, matching interfaces between parts to facilitate easy nodal sharing (conformal mesh) during FEM assembly.
 9. EXACT COORDINATES: Numerical precision is absolute. You MUST use the exact coordinate values provided in the "Location" or "key_coordinates" data for any splitting plane. NEVER round, truncate, or simplify these numbers (e.g., if a location is 51.962, the split MUST be exactly at 51.962).
-10. CENTER-CUT PRIORITY: When splitting near cylindrical features, ALWAYS prioritize cutting through the exact center (Location) of the feature. This is superior for structured meshing. Only cut between features (mid-ligament) if it is explicitly required to stay within the MAX_PARTS limit.
+10. CENTER-CUT PRIORITY: When splitting near cylindrical features, ALWAYS prioritize cutting through the exact center (Location) of the feature. This is superior for structured meshing. Only cut between features (mid-ligament) if it is explicitly required to stay within the limits.
 11. NO APPROXIMATION: Never guess coordinates. Always cross-reference your chosen coordinates with the "key_coordinates" list in the summary. If you intend to bisect a feature, copy and paste its location coordinate exactly.
+12. MATHEMATICAL GRID PLANNING: Remember that N X-cuts and M Y-cuts result in (N+1)*(M+1) parts. With MAX_SPLITS={max_splits}, plan your N and M such that you stay within the budget while creating a balanced grid. Interleave your splits (e.g., X, Y, X, Y...) to maintain balance.
 
 Geometric Summary:
 {json.dumps(summary, indent=2)}
