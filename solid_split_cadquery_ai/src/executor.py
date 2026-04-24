@@ -6,10 +6,22 @@ class SplitExecutor:
         # We work with a list of solids. Initially, just one.
         self.solids = initial_model.solids().vals()
 
-    def execute_plan(self, plan):
+    def execute_plan(self, plan, max_parts=50, min_volume_ratio=0.01):
+        """
+        AI 계획을 실행하여 솔리드를 분할합니다.
+        :param max_parts: 허용되는 최대 조각 수
+        :param min_volume_ratio: 원래 부피 대비 최소 허용 부피 비율 (예: 0.01 = 1%)
+        """
         logger.info(f"Executing plan: {plan.get('strategy_description', 'No description')}")
         
+        # 전체 원본 부피 계산
+        original_total_volume = sum(s.Volume() for s in self.solids)
+        
         for split in plan.get("splits", []):
+            if len(self.solids) >= max_parts:
+                logger.warning(f"Reached max parts limit ({max_parts}). Stopping further splits.")
+                break
+                
             op = split.get("operation")
             if op == "plane_cut":
                 self._plane_cut(split)
@@ -17,6 +29,11 @@ class SplitExecutor:
                 self._hole_isolation(split)
             else:
                 logger.warning(f"Unknown operation: {op}")
+
+            # 분할 후 부피 유효성 체크
+            for s in self.solids:
+                if s.Volume() < original_total_volume * min_volume_ratio:
+                    logger.warning(f"Extremely small part detected ({s.Volume():.2f}). Consider adjusting strategy.")
         
         return self.solids
 

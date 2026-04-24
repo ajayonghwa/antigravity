@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description="AI-Driven Solid Decomposition Tool")
     parser.add_argument("input", help="Path to the input STEP file")
     parser.add_argument("--output", default="output_report", help="Directory to save the report")
+    parser.add_argument("--max-parts", type=int, default=15, help="Maximum number of split parts allowed")
+    parser.add_argument("--min-volume", type=float, default=0.01, help="Minimum volume ratio (0.01 = 1%)")
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -56,7 +58,7 @@ def main():
     # 6. 분할 실행 (Executor)
     print("✂️ Executing splits...")
     executor = SplitExecutor(model)
-    solids = executor.execute_plan(ai_plan)
+    solids = executor.execute_plan(ai_plan, max_parts=args.max_parts, min_volume_ratio=args.min_volume)
     
     # 7. 시각화 (After)
     combined_after = cq.Workplane("XY")

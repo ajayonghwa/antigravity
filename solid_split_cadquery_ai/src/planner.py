@@ -40,28 +40,36 @@ class AIPlanner:
             return self._get_fallback_plan(summary)
 
     def _build_prompt(self, summary):
+        # 제약 조건 설정 (엔지니어링 가이드)
+        max_parts = 15
+        min_vol_percent = 1.0 # 1%
+        
         return f"""
 You are an expert in FEM (Finite Element Method) and CAD solid decomposition.
-Your goal is to propose a splitting plan to achieve a high-quality hexahedral mesh.
+Your goal is to propose a minimal yet effective splitting plan for high-quality hexahedral mesh.
 
-Geometric Summary of the target solid:
+Constraints:
+1. MAX_PARTS: Total part count must not exceed {max_parts}.
+2. MIN_VOLUME: Each resulting part must be at least {min_vol_percent}% of original volume.
+3. EFFICIENCY: Prioritize sweepable regions and isolate holes/junctions.
+
+Geometric Summary:
 {json.dumps(summary, indent=2)}
 
-Please provide a decomposition plan in JSON format only.
-The JSON must follow this structure:
+Please provide a decomposition plan in JSON format only:
 {{
-  "strategy_description": "A brief name for the strategy",
-  "reasoning": "Explain why you chose these split points",
+  "strategy_description": "...",
+  "reasoning": "...",
   "splits": [
     {{
       "operation": "plane_cut",
       "axis": "X" | "Y" | "Z",
       "coordinate": float,
-      "reason": "Why split here?"
+      "reason": "..."
     }}
   ]
 }}
-Only return the JSON object. No other text.
+Only return the JSON object.
 """
 
     def _get_fallback_plan(self, summary):
