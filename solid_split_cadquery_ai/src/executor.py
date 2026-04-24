@@ -43,6 +43,8 @@ class SplitExecutor:
         reason = split.get("reason", "")
         
         logger.info(f"Performing plane cut: axis={axis}, coord={coord} ({reason})")
+        print(f"DEBUG_VAL: axis={axis}, coord={coord}")
+
         
         new_solids = []
         for solid in self.solids:
@@ -69,17 +71,16 @@ class SplitExecutor:
                     plane = cq.Plane(origin=(coord, 0, 0), normal=(1, 0, 0))
                     result = wp.split(keepTop=True, keepBottom=True) # This uses the current WP plane
                 
-                # To be robust, let's use a more direct approach:
-                # We'll use the .split() method on Workplane which uses the current plane.
-                
+                # 절대 좌표계 기반의 절단 (솔리드 중심 기준이 아닌 절대 원점 기준)
                 if axis == "Z":
-                    res = cq.Workplane(solid).workplane(offset=coord).split(keepTop=True, keepBottom=True)
+                    res = cq.Workplane("XY").workplane(offset=coord).add(solid).split(keepTop=True, keepBottom=True)
                 elif axis == "X":
-                    res = cq.Workplane(solid).transformed(rotate=(0, 90, 0), offset=(0, 0, coord)).split(keepTop=True, keepBottom=True)
+                    res = cq.Workplane("YZ").workplane(offset=coord).add(solid).split(keepTop=True, keepBottom=True)
                 elif axis == "Y":
-                    res = cq.Workplane(solid).transformed(rotate=(90, 0, 0), offset=(0, 0, coord)).split(keepTop=True, keepBottom=True)
+                    res = cq.Workplane("XZ").workplane(offset=coord).add(solid).split(keepTop=True, keepBottom=True)
                 else:
-                    res = cq.Workplane(solid) # No change
+                    res = cq.Workplane(solid)
+
                 
                 new_solids.extend(res.solids().vals())
             except Exception as e:

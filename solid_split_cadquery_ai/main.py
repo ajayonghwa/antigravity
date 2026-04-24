@@ -44,6 +44,15 @@ def main():
     planner = AIPlanner()
     ai_plan = planner.plan_splits(summary)
     
+    # 리포트 생성을 위해 필수 키가 있는지 확인하고 기본값을 채웁니다.
+    if not ai_plan: ai_plan = {}
+    if "strategy_description" not in ai_plan:
+        ai_plan["strategy_description"] = "Standard Decomposition"
+    if "reasoning" not in ai_plan:
+        ai_plan["reasoning"] = "AI provided no reasoning. Applying fallback heuristics."
+    if "splits" not in ai_plan:
+        ai_plan["splits"] = []
+
     if not ai_plan.get("splits"):
         print("⚠️ AI produced an empty plan. Using defaults.")
 

@@ -18,11 +18,15 @@ class GeometryExtractor:
     def _get_cylinder_info(self, face):
         cyl = BRepAdaptor_Surface(face.wrapped).Cylinder()
         radius = cyl.Radius()
-        loc = cyl.Location()
+        
+        # Use the actual center of the face for more accurate position
+        # face.Center() returns the centroid of the face segment.
+        center = face.Center()
+        
         axis = cyl.Axis().Direction()
         return {
             "radius": round(radius, 3),
-            "location": [round(loc.X(), 3), round(loc.Y(), 3), round(loc.Z(), 3)],
+            "location": [round(center.x, 3), round(center.y, 3), round(center.z, 3)],
             "axis": [round(axis.X(), 3), round(axis.Y(), 3), round(axis.Z(), 3)]
         }
 
