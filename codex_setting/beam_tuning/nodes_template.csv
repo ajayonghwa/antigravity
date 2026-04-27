@@ -1,0 +1,4 @@
+node_id,segment_id,x,y,z,shared_key,share_mode,attach_kind,attach_dofs,notes
+,1,0,0,0,root,shared,cp,UX,Example: leave node_id blank to auto-allocate from (max existing node + 10)
+,1,10,0,0,seg1_local,isolated,ce,UX,Example: an isolated node only for segment 1 (node_id auto)
+,2,10,0,0,root,shared,cp,UX,Example: same shared_key=root (node_id auto)

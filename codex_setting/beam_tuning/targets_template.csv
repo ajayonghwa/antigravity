@@ -1,0 +1,4 @@
+mode,frequency_hz_target,eff_mass_x_target,eff_mass_y_target,eff_mass_z_target,weight_freq,weight_mass,notes
+1,,,,,1.0,1.0,Fill targets for mode 1 (use either absolute or normalized effective mass targets)
+2,,,,,1.0,1.0,
+

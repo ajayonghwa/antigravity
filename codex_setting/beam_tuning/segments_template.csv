@@ -1,0 +1,4 @@
+segment_id,selection_mode,range_axis,range_min,range_max,mass,cog_x,cog_y,cog_z,Ixx_cog,Iyy_cog,Izz_cog,Ixy_cog,Iyz_cog,Izx_cog,feature_type,od_min,od,od_max,id_min,id,id_max,thk_min,thk,thk_max,len_min,len,len_max,notes
+1,range,z,100,250,,,,,,,,,,,unknown,,,,,,,,,,,,,Fill mass/COG/inertia from SpaceClaim output; then enter guessed dims and bounds for tuning
+2,range,z,400,520,,,,,,,,,,,unknown,,,,,,,,,,,,,Second segment example (optional)
+

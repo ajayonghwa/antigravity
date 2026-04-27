@@ -1,0 +1,4 @@
+beam_id,segment_id,node_start_id,node_end_id,x_start,y_start,z_start,x_end,y_end,z_end,insert_axis,insert_positions,notes
+1,1,20001,20002,0,0,0,0,0,100,z,"50",Example: split a beam from z=0..100 by inserting a node at z=50
+2,1,20003,20004,0,0,0,0,0,100,z,"25;75",Example: insert two nodes (z=25 and z=75)
+

@@ -1,0 +1,8 @@
+connector_id,kind,from_segment,to_segment,dof,k_min,k,k_max,c_min,c,c_max,mass_kg,notes
+1,combin14,1,2,UX,,,,,,,,,Example spring/damper between segment 1 and 2 in UX (fill k/c bounds)
+2,mass21,1,,,,"","","","","",,,0.0,Example lumped mass on segment 1 (fill mass_kg)
+3,ce,1,2,,,,,,,,,,Constraint equation placeholder (define in APDL per your standard)
+4,cp,1,2,,,,,,,,,,Coupling placeholder (define in APDL per your standard)
+5,d,1,,,,,,,,,,,Boundary condition placeholder (define in APDL per your standard)
+6,rbe3,1,2,,,,,,,,,,RBE3-like distribution placeholder (implement via your standard method; do not guess)
+
